@@ -1,86 +1,82 @@
-# claude-proxy
+# api-proxy
 
-A minimal Cloudflare Worker that acts as a transparent reverse proxy for the [Anthropic API](https://docs.anthropic.com/en/api). It rewrites incoming requests to `api.anthropic.com` and injects your API key server-side, so clients never need (or see) the key.
+Minimal Cloudflare Workers that act as transparent reverse proxies for AI APIs. Each worker rewrites incoming requests to the upstream API and injects the API key server-side, so clients never need (or see) the key.
 
-## How it works
+## Proxies
 
-1. Receives any request at the worker URL
-2. Rewrites the hostname to `api.anthropic.com` (HTTPS)
-3. Replaces the `x-api-key` header with the value from the `ANTHROPIC_API_KEY` secret
-4. Forwards the request as-is (method, headers, body) to Anthropic
-5. Returns the response directly (streaming-compatible, no buffering)
+| Proxy | Upstream | Config | Secret |
+|---|---|---|---|
+| Claude | `api.anthropic.com` | `wrangler.claude.toml` | `ANTHROPIC_API_KEY` |
+| Gemini | `generativelanguage.googleapis.com` | `wrangler.gemini.toml` | `GEMINI_API_KEY` |
 
 ## Setup
 
 ```bash
 bun install
+bunx wrangler login
 ```
 
 ### Deploy
 
 ```bash
-# Authenticate with Cloudflare
-bunx wrangler login
+# Claude
+bunx wrangler secret put ANTHROPIC_API_KEY --config wrangler.claude.toml
+bunx wrangler deploy --config wrangler.claude.toml
 
-# Set your Anthropic API key as a secret (will prompt for the value)
-bunx wrangler secret put ANTHROPIC_API_KEY
-
-# Deploy the worker
-bunx wrangler deploy
+# Gemini
+bunx wrangler secret put GEMINI_API_KEY --config wrangler.gemini.toml
+bunx wrangler deploy --config wrangler.gemini.toml
 ```
 
 ### Usage
 
-Use the worker URL in place of `api.anthropic.com`. No `x-api-key` needed in the request:
+Use the worker URL in place of the upstream API. No API key needed in the request:
 
 ```bash
+# Claude
 curl https://<your-worker>.workers.dev/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{
-    "model": "claude-sonnet-4-5-20250929",
-    "max_tokens": 256,
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
+  -d '{"model": "claude-sonnet-4-5-20250929", "max_tokens": 256,
+       "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Gemini
+curl https://<your-worker>.workers.dev/v1beta/models/gemini-3.1-flash-image-preview:generateContent \
+  -H "content-type: application/json" \
+  -d '{"contents": [{"parts": [{"text": "Hello"}]}]}'
 ```
 
 ## Disable / Enable
 
-The worker URL can be toggled without deleting the worker by changing `workers_dev` in `wrangler.toml`:
+Toggle a worker URL without deleting it:
 
 ```bash
-# Disable (URL returns 404, worker stays deployed)
-sed -i '' 's/workers_dev = true/workers_dev = false/' wrangler.toml
-bunx wrangler deploy
+# Disable Claude (URL returns 404, worker stays deployed)
+sed -i '' 's/workers_dev = true/workers_dev = false/' wrangler.claude.toml
+bunx wrangler deploy --config wrangler.claude.toml
 
 # Re-enable
-sed -i '' 's/workers_dev = false/workers_dev = true/' wrangler.toml
-bunx wrangler deploy
+sed -i '' 's/workers_dev = false/workers_dev = true/' wrangler.claude.toml
+bunx wrangler deploy --config wrangler.claude.toml
 ```
 
-### Schedule auto-disable
+### Schedule
 
 ```bash
-./schedule.sh disable 22:00    # disable at 10pm
-./schedule.sh enable 08:00     # re-enable at 8am
+./schedule.sh disable 22:00              # disable Claude at 10pm
+./schedule.sh enable 08:00               # re-enable Claude at 8am
+./schedule.sh disable +30m               # disable Claude in 30 minutes
+./schedule.sh --gemini disable 22:00     # disable Gemini at 10pm
 ```
 
 If the time has already passed today, it schedules for tomorrow. Output includes the PID to cancel and a log path to check results.
 
 ## Cost
 
-Cloudflare Workers free tier covers this comfortably:
-
-| | Free tier |
-|---|---|
-| Requests | 100,000/day |
-| CPU time | 10ms/request |
-| Credit card | Not required |
-
-You only pay Anthropic for API usage. The proxy itself is free.
+Cloudflare Workers free tier covers this (100k requests/day, no credit card required). You only pay for API usage with the upstream providers.
 
 ## Security
 
-- The API key is stored as a Cloudflare secret (encrypted at rest, never in code)
-- The key is only injected into outbound requests to Anthropic, never returned to callers
-- **Note:** The worker URL is unauthenticated — anyone with the URL can use your API key (without seeing it). Keep the URL private or add a bearer token check
+- API keys are stored as Cloudflare secrets (encrypted at rest, never in code)
+- Keys are only injected into outbound requests, never returned to callers
+- **Note:** Worker URLs are unauthenticated — anyone with the URL can use your API key (without seeing it). Keep URLs private or add a bearer token check

@@ -1,5 +1,5 @@
 name = "claude-proxy"
-main = "src/index.ts"
+main = "src/claude.ts"
 compatibility_date = "2025-01-01"
 workers_dev = true
 preview_urls = false
