@@ -1,0 +1,16 @@
+{
+  "name": "llm-proxy",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260305.0",
+    "@types/bun": "^1.3.9"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "wrangler": "^4.69.0"
+  }
+}
