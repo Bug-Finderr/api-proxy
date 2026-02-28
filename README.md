@@ -63,13 +63,13 @@ bunx wrangler deploy --config wrangler.claude.toml
 ### Schedule
 
 ```bash
-./schedule.sh disable 22:00              # disable Claude at 10pm
-./schedule.sh enable 08:00               # re-enable Claude at 8am
-./schedule.sh disable +30m               # disable Claude in 30 minutes
-./schedule.sh --gemini disable 22:00     # disable Gemini at 10pm
+./schedule.sh disable 22:00                       # disable Claude at 10pm today
+./schedule.sh enable 08:00                        # re-enable Claude at 8am
+./schedule.sh disable +30m                        # disable Claude in 30 minutes
+./schedule.sh --gemini disable "2026-03-03 01:00" # disable Gemini on a specific date
 ```
 
-If the time has already passed today, it schedules for tomorrow. Output includes the PID to cancel and a log path to check results.
+For `HH:MM`, if the time has already passed today it schedules for tomorrow. Output includes the PID to cancel and a log path to check results.
 
 ## Cost
 
