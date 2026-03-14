@@ -92,6 +92,6 @@ Cloudflare Workers free tier covers this (100k requests/day, no credit card requ
 - Keys are only injected into outbound requests, never returned to callers
 - **Note:** Worker URLs are unauthenticated — anyone with the URL can use your API key (without seeing it). Keep URLs private or add a bearer token check
 
-<br>
+## Contributing
 
-> This project is fully on vibe.
+Issues are welcome. PRs are not accepted and will be auto-closed.
