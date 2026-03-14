@@ -1,13 +1,15 @@
 #!/bin/bash
-# Usage: ./schedule.sh [--gemini] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>
+# Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>
 set -euo pipefail
 
-config="wrangler.claude.toml"; label="claude"
-[[ "${1:-}" == "--gemini" ]] && config="wrangler.gemini.toml" label="gemini" && shift
+case "${1:-}" in
+  --claude) label="claude"; shift ;; --gemini) label="gemini"; shift ;; --openai) label="openai"; shift ;; *) label="claude" ;;
+esac
+config="wrangler.${label}.toml"
 
 action=${1:-}; shift || true; time_arg="${*:-}"
 [[ "$action" =~ ^(enable|disable)$ && -n "$time_arg" ]] || {
-  echo "Usage: ./schedule.sh [--gemini] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>"; exit 1
+  echo "Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>"; exit 1
 }
 
 [[ "$action" == "enable" ]] && from=false to=true || from=true to=false

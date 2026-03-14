@@ -8,6 +8,7 @@ Minimal Cloudflare Workers that act as transparent reverse proxies for AI APIs. 
 |---|---|---|---|
 | Claude | `api.anthropic.com` | `wrangler.claude.toml` | `ANTHROPIC_API_KEY` |
 | Gemini | `generativelanguage.googleapis.com` | `wrangler.gemini.toml` | `GEMINI_API_KEY` |
+| OpenAI | `api.openai.com` | `wrangler.openai.toml` | `OPENAI_API_KEY` |
 
 ## Setup
 
@@ -26,6 +27,10 @@ bunx wrangler deploy --config wrangler.claude.toml
 # Gemini
 bunx wrangler secret put GEMINI_API_KEY --config wrangler.gemini.toml
 bunx wrangler deploy --config wrangler.gemini.toml
+
+# OpenAI
+bunx wrangler secret put OPENAI_API_KEY --config wrangler.openai.toml
+bunx wrangler deploy --config wrangler.openai.toml
 ```
 
 ### Usage
@@ -44,6 +49,11 @@ curl https://<your-worker>.workers.dev/v1/messages \
 curl https://<your-worker>.workers.dev/v1beta/models/gemini-3.1-flash-image-preview:generateContent \
   -H "content-type: application/json" \
   -d '{"contents": [{"parts": [{"text": "Hello"}]}]}'
+
+# OpenAI
+curl https://<your-worker>.workers.dev/v1/chat/completions \
+  -H "content-type: application/json" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ## Disable / Enable
@@ -67,6 +77,7 @@ bunx wrangler deploy --config wrangler.claude.toml
 ./schedule.sh enable 08:00                        # re-enable Claude at 8am
 ./schedule.sh disable +30m                        # disable Claude in 30 minutes
 ./schedule.sh --gemini disable "2026-03-03 01:00" # disable Gemini on a specific date
+./schedule.sh --openai disable 23:00             # disable OpenAI at 11pm
 ```
 
 For `HH:MM`, if the time has already passed today it schedules for tomorrow. Output includes the PID to cancel and a log path to check results.
@@ -80,3 +91,7 @@ Cloudflare Workers free tier covers this (100k requests/day, no credit card requ
 - API keys are stored as Cloudflare secrets (encrypted at rest, never in code)
 - Keys are only injected into outbound requests, never returned to callers
 - **Note:** Worker URLs are unauthenticated — anyone with the URL can use your API key (without seeing it). Keep URLs private or add a bearer token check
+
+<br>
+
+> This project is fully on vibe.
