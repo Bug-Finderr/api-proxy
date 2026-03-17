@@ -1,21 +1,33 @@
 #!/bin/bash
-# Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>
+# Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> [HH:MM | YYYY-MM-DD HH:MM | +Nm]
 set -euo pipefail
 
-case "${1:-}" in
-  --claude) label="claude"; shift ;; --gemini) label="gemini"; shift ;; --openai) label="openai"; shift ;; *) label="claude" ;;
-esac
+label="claude"; action=""; time_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --claude|--gemini|--openai) label="${arg#--}" ;;
+    enable|disable) action="$arg" ;;
+    *) time_args+=("$arg") ;;
+  esac
+done
 config="wrangler.${label}.toml"
+time_arg="${time_args[*]:-}"
 
-action=${1:-}; shift || true; time_arg="${*:-}"
-[[ "$action" =~ ^(enable|disable)$ && -n "$time_arg" ]] || {
-  echo "Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> <HH:MM | YYYY-MM-DD HH:MM | +Nm>"; exit 1
+[[ "$action" =~ ^(enable|disable)$ ]] || {
+  echo "Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> [HH:MM | YYYY-MM-DD HH:MM | +Nm]"; exit 1
 }
 
 [[ "$action" == "enable" ]] && from=false to=true || from=true to=false
 dir=$(cd "$(dirname "$0")" && pwd)
-now=$(date +%s)
 
+if [[ -z "$time_arg" ]]; then
+  sed -i '' "s/workers_dev = $from/workers_dev = $to/" "$dir/$config"
+  grep -q "workers_dev = $to" "$dir/$config" || { echo "ERROR: sed failed"; exit 1; }
+  cd "$dir" && bunx wrangler deploy --config "$config"
+  exit 0
+fi
+
+now=$(date +%s)
 if [[ "$time_arg" =~ ^\+([0-9]+)m$ ]]; then
   delay=$((BASH_REMATCH[1] * 60))
 elif [[ "$time_arg" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then

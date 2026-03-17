@@ -53,34 +53,23 @@ curl https://<your-worker>.workers.dev/v1beta/models/gemini-3.1-flash-image-prev
 # OpenAI
 curl https://<your-worker>.workers.dev/v1/chat/completions \
   -H "content-type: application/json" \
-  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "gpt-5.4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ## Disable / Enable
 
-Toggle a worker URL without deleting it:
+Toggle or schedule a worker URL without deleting it:
 
 ```bash
-# Disable Claude (URL returns 404, worker stays deployed)
-sed -i '' 's/workers_dev = true/workers_dev = false/' wrangler.claude.toml
-bunx wrangler deploy --config wrangler.claude.toml
-
-# Re-enable
-sed -i '' 's/workers_dev = false/workers_dev = true/' wrangler.claude.toml
-bunx wrangler deploy --config wrangler.claude.toml
-```
-
-### Schedule
-
-```bash
+./schedule.sh disable                             # disable Claude immediately
+./schedule.sh --gemini enable                     # enable Gemini immediately
 ./schedule.sh disable 22:00                       # disable Claude at 10pm today
-./schedule.sh enable 08:00                        # re-enable Claude at 8am
 ./schedule.sh disable +30m                        # disable Claude in 30 minutes
 ./schedule.sh --gemini disable "2026-03-03 01:00" # disable Gemini on a specific date
-./schedule.sh --openai disable 23:00             # disable OpenAI at 11pm
+./schedule.sh --openai disable 23:00              # disable OpenAI at 11pm
 ```
 
-For `HH:MM`, if the time has already passed today it schedules for tomorrow. Output includes the PID to cancel and a log path to check results.
+Time is optional — omit it to run immediately. For `HH:MM`, if the time has already passed today it schedules for tomorrow.
 
 ## Cost
 
