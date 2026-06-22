@@ -27,6 +27,7 @@ export interface CreateInput {
   label: string;
   providers: CoarseProvider[];
   token?: string; // admin-typed; otherwise generated
+  expiresAt?: string; // ISO (UTC); absent = never expires
 }
 
 export async function createToken(
@@ -41,6 +42,7 @@ export async function createToken(
     providers: input.providers,
     status: "active",
     createdAt: new Date().toISOString(),
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
   };
   await kv.put(hash, JSON.stringify(meta));
   return { token, hash, meta };
@@ -67,7 +69,12 @@ export async function getValidatedByHash(
   hash: string,
 ): Promise<TokenMetadata | null> {
   const meta = parseMeta(await kv.get(hash));
-  return meta?.status === "active" ? meta : null;
+  if (meta?.status !== "active") return null;
+  if (meta.expiresAt) {
+    const t = Date.parse(meta.expiresAt);
+    if (Number.isNaN(t) || t <= Date.now()) return null; // fail-closed on bad/past
+  }
+  return meta;
 }
 
 /** Resolve a plaintext token to its metadata, only if it exists and is active. */

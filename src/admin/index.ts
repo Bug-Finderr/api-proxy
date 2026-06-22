@@ -114,10 +114,18 @@ app.post("/api/tokens", async (c) => {
   const fd = await c.req.formData();
   const providers = parseProviders(fd);
   const custom = fd.get("token");
+  const rawExp = String(fd.get("expiresAt") || "").trim();
+  let expiresAt: string | undefined;
+  if (rawExp) {
+    const d = new Date(rawExp); // datetime-local is local time; toISOString normalizes to UTC
+    if (Number.isNaN(d.getTime())) return c.text("invalid expiry", 400);
+    expiresAt = d.toISOString();
+  }
   const { token } = await createToken(c.env.TOKENS, {
     label: String(fd.get("label") || ""),
     providers: providers.length ? providers : ["openai"],
     token: custom ? String(custom) : undefined,
+    expiresAt,
   });
   return c.html(createdNotice(token), 200, { "HX-Trigger": "tokens-changed" });
 });

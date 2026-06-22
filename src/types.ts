@@ -7,8 +7,9 @@ export interface TokenMetadata {
   providers: CoarseProvider[];
   status: "active" | "disabled";
   createdAt: string; // ISO
+  expiresAt?: string; // ISO (UTC); absent = never expires
   // lastUsed is stored in a separate `<hash>:lu` key (see tokens.ts), not here.
-  // reserved for Later (absent in v1): expiresAt, limits, spend
+  // reserved for Later: limits, spend
 }
 
 export interface Env {

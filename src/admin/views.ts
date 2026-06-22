@@ -14,7 +14,7 @@ h1{font-size:20px;font-weight:600;margin:0 0 20px}
 .card{background:#15151c;border:1px solid #24242e;border-radius:12px;padding:18px;margin:0 0 18px}
 .card h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9a9aa6;margin:0 0 14px}
 label{display:block;font-size:12px;color:#9a9aa6;margin:0 0 4px}
-input[type=text],input[type=password]{width:100%;background:#0e0e14;border:1px solid #2a2a36;border-radius:8px;color:#e7e7ea;padding:9px 11px;font:inherit}
+input[type=text],input[type=password],input[type=datetime-local]{width:100%;background:#0e0e14;border:1px solid #2a2a36;border-radius:8px;color:#e7e7ea;padding:9px 11px;font:inherit}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
 .row>div{flex:1;min-width:160px}
 .checks{display:flex;gap:14px;margin:12px 0}
@@ -42,12 +42,15 @@ const timeAgo = (iso?: string) => {
   return iso.slice(0, 10);
 };
 
-export const tokenRow = (r: Row) => html`
-	<tr id="tok-${r.hash}" class="${r.status === "disabled" ? "disabled" : ""}">
+export const tokenRow = (r: Row) => {
+  const expired = !!r.expiresAt && Date.parse(r.expiresAt) <= Date.now();
+  return html`
+	<tr id="tok-${r.hash}" class="${r.status === "disabled" || expired ? "disabled" : ""}">
 		<td class="mono">${r.label || "(no label)"}</td>
 		<td class="mono muted">…${r.last4}</td>
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
+		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${r.expiresAt ? r.expiresAt.slice(0, 10) : "never"}</span>`}</td>
 		<td class="muted">${timeAgo(r.lastUsed)}</td>
 		<td style="text-align:right;white-space:nowrap">
 			<button
@@ -69,8 +72,8 @@ export const tokenRow = (r: Row) => html`
 				delete
 			</button>
 		</td>
-	</tr>
-`;
+	</tr>`;
+};
 
 export const tokenTable = (rows: Row[]) => html`
 	<table>
@@ -80,12 +83,13 @@ export const tokenTable = (rows: Row[]) => html`
 				<th>Token</th>
 				<th>Providers</th>
 				<th>Status</th>
+				<th>Expires</th>
 				<th>Last used</th>
 				<th></th>
 			</tr>
 		</thead>
 		<tbody>
-			${rows.length ? rows.map(tokenRow) : html`<tr><td colspan="6" class="muted">No tokens yet.</td></tr>`}
+			${rows.length ? rows.map(tokenRow) : html`<tr><td colspan="7" class="muted">No tokens yet.</td></tr>`}
 		</tbody>
 	</table>
 `;
@@ -153,6 +157,10 @@ export const dashboardPage = () => html`<!doctype html>
 							<div>
 								<label for="token">Token (blank = generate)</label>
 								<input type="text" id="token" name="token" placeholder="auto" autocomplete="off" />
+							</div>
+							<div>
+								<label for="expiresAt">Expires (optional)</label>
+								<input type="datetime-local" id="expiresAt" name="expiresAt" />
 							</div>
 						</div>
 						<div class="checks">

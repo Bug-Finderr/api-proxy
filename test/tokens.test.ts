@@ -130,3 +130,36 @@ describe("touchLastUsed", () => {
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
 });
+
+describe("expiry (getValidatedByHash via getValidated)", () => {
+  const mk = (token: string, expiresAt?: string) =>
+    createToken(env.TOKENS, {
+      label: token,
+      providers: ["openai"],
+      token,
+      expiresAt,
+    });
+
+  it("absent expiresAt stays valid", async () => {
+    const { token } = await mk("exp-none");
+    expect(await getValidated(env.TOKENS, token)).not.toBeNull();
+  });
+  it("future expiresAt is valid", async () => {
+    const { token } = await mk(
+      "exp-future",
+      new Date(Date.now() + 3_600_000).toISOString(),
+    );
+    expect(await getValidated(env.TOKENS, token)).not.toBeNull();
+  });
+  it("past expiresAt is rejected", async () => {
+    const { token } = await mk(
+      "exp-past",
+      new Date(Date.now() - 1000).toISOString(),
+    );
+    expect(await getValidated(env.TOKENS, token)).toBeNull();
+  });
+  it("malformed expiresAt is rejected (fail-closed)", async () => {
+    const { token } = await mk("exp-bad", "not-a-date");
+    expect(await getValidated(env.TOKENS, token)).toBeNull();
+  });
+});
