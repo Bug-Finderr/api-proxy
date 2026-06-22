@@ -178,12 +178,12 @@ describe("security invariant", () => {
     await createToken(env.TOKENS, {
       label: "sec",
       providers: ["openai"],
-      token: "SECRET-DOPPEL",
+      token: "SECRET-TOKEN",
     });
     await call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
-        headers: { authorization: "Bearer SECRET-DOPPEL" },
+        headers: { authorization: "Bearer SECRET-TOKEN" },
         body: "{}",
       }),
     );
@@ -192,7 +192,7 @@ describe("security invariant", () => {
       captured!.headers.get("x-api-key"),
       captured!.headers.get("x-goog-api-key"),
     ].join("|");
-    expect(slots).not.toContain("SECRET-DOPPEL");
+    expect(slots).not.toContain("SECRET-TOKEN");
   });
 });
 
@@ -330,5 +330,60 @@ describe("SSE passthrough", () => {
     const text = await res.text();
     expect(text).toContain("data: a");
     expect(text).toContain("[DONE]");
+  });
+});
+
+describe("CORS", () => {
+  it("answers the preflight OPTIONS without auth and never calls upstream", async () => {
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://app.example",
+          "access-control-request-headers": "x-api-key, content-type",
+        },
+      }),
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "https://app.example",
+    );
+    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(res.headers.get("access-control-allow-headers")).toBe(
+      "x-api-key, content-type",
+    );
+    expect(res.headers.get("access-control-max-age")).toBe("86400");
+    expect(captured).toBeNull();
+  });
+
+  it("reflects Origin and exposes the Gemini upload headers on a proxied response", async () => {
+    await seed("tk-cors", ["anthropic"]);
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-cors", origin: "https://app.example" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "https://app.example",
+    );
+    expect(res.headers.get("access-control-expose-headers")).toContain(
+      "x-goog-upload-url",
+    );
+  });
+
+  it("omits CORS headers when no Origin is sent (server-side callers)", async () => {
+    await seed("tk-nocors", ["anthropic"]);
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-nocors" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });

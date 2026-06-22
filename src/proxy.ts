@@ -104,8 +104,51 @@ function egressStub(env: Env): DurableObjectStub {
   return env.US_EGRESS.get(id, { locationHint: "wnam" });
 }
 
-/** Validate the proxy token, swap in the real key, forward to the upstream, stream back. */
+// Headers a browser must be told to expose so the Gemini resumable-upload flow works
+// (the client reads x-goog-upload-url, then uploads bytes straight to Google).
+const EXPOSE_HEADERS =
+  "x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity";
+
+/** Reflect the caller's Origin so browser SDKs can read the response. No-op for
+ *  non-browser callers (no Origin). The real key never rides on any CORS path. */
+function withCors(res: Response, req: Request): Response {
+  const origin = req.headers.get("origin");
+  if (origin) {
+    res.headers.set("access-control-allow-origin", origin);
+    res.headers.append("vary", "Origin");
+    res.headers.set("access-control-expose-headers", EXPOSE_HEADERS);
+  }
+  return res;
+}
+
+/** Answer the browser preflight. OPTIONS carries no auth header, so it must be handled
+ *  before the token checks - otherwise every browser SDK's preflight 401s. */
+function corsPreflight(req: Request): Response {
+  const res = new Response(null, { status: 204 });
+  res.headers.set(
+    "access-control-allow-methods",
+    "GET, POST, PUT, DELETE, OPTIONS",
+  );
+  res.headers.set(
+    "access-control-allow-headers",
+    req.headers.get("access-control-request-headers") || "*",
+  );
+  res.headers.set("access-control-max-age", "86400");
+  return withCors(res, req);
+}
+
+/** Top-level proxy entry: CORS preflight, then reflect Origin onto every response. */
 export async function handleProxy(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  if (req.method === "OPTIONS") return corsPreflight(req);
+  return withCors(await proxyRequest(req, env, ctx), req);
+}
+
+/** Validate the proxy token, swap in the real key, forward to the upstream, stream back. */
+async function proxyRequest(
   req: Request,
   env: Env,
   ctx: ExecutionContext,
