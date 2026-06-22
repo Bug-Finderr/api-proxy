@@ -1,85 +1,94 @@
 # api-proxy
 
-Minimal Cloudflare Workers that act as transparent reverse proxies for AI APIs. Each worker rewrites incoming requests to the upstream API and injects the API key server-side, so clients never need (or see) the key.
+A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs behind **revocable "doppelganger" tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
 
-## Proxies
+The consumer changes only **two things** in their normal SDK: the base URL (point at your worker) and the API key (use a doppelganger token).
 
-| Proxy | Upstream | Config | Secret |
+## How it works
+
+The doppelganger token rides in the SDK's normal auth slot. The worker reads it, validates it against KV, checks the token is scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included).
+
+| Token arrives in | Provider | Upstream | Real key set as |
 |---|---|---|---|
-| Claude | `api.anthropic.com` | `wrangler.claude.toml` | `ANTHROPIC_API_KEY` |
-| Gemini | `generativelanguage.googleapis.com` | `wrangler.gemini.toml` | `GEMINI_API_KEY` |
-| OpenAI | `api.openai.com` | `wrangler.openai.toml` | `OPENAI_API_KEY` |
+| `Authorization: Bearer` | OpenAI | `api.openai.com` | `Authorization: Bearer` |
+| `x-api-key` | Anthropic | `api.anthropic.com` | `x-api-key` |
+| `x-goog-api-key` / `?key=` | Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
+| `Authorization: Bearer` + path `/v1beta/openai/*` | Gemini (OpenAI-compat) | `generativelanguage.googleapis.com` | `Authorization: Bearer` |
+
+## Client setup
+
+Point the SDK's base URL at the worker and use a doppelganger token as the key:
+
+| SDK | base URL | key |
+|---|---|---|
+| OpenAI (Python / Node) | `https://<worker>/v1` | token |
+| Anthropic (Python / Node) | `https://<worker>` (no `/v1`) | token |
+| Google `@google/genai` (Node) | `httpOptions.baseUrl = https://<worker>` | token |
+| Gemini from Python | point the **OpenAI** SDK at `https://<worker>/v1beta/openai` | token |
+
+```bash
+# OpenAI-style
+curl https://<worker>/v1/chat/completions \
+  -H "authorization: Bearer <token>" -H "content-type: application/json" \
+  -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"Hello"}]}'
+```
 
 ## Setup
 
 ```bash
-bun install
-bunx wrangler login
+nub install
+nubx wrangler login
+nubx wrangler kv namespace create TOKENS   # paste the id into wrangler.toml
 ```
 
-### Deploy
+Set the secrets (only these four; never committed):
 
 ```bash
-# Claude
-bunx wrangler secret put ANTHROPIC_API_KEY --config wrangler.claude.toml
-bunx wrangler deploy --config wrangler.claude.toml
-
-# Gemini
-bunx wrangler secret put GEMINI_API_KEY --config wrangler.gemini.toml
-bunx wrangler deploy --config wrangler.gemini.toml
-
-# OpenAI
-bunx wrangler secret put OPENAI_API_KEY --config wrangler.openai.toml
-bunx wrangler deploy --config wrangler.openai.toml
+nubx wrangler secret put OPENAI_API_KEY
+nubx wrangler secret put ANTHROPIC_API_KEY
+nubx wrangler secret put GEMINI_API_KEY
+nubx wrangler secret put ADMIN_SECRET     # password for the admin dashboard
+nubx wrangler deploy
 ```
 
-### Usage
+Optional plain vars (NOT secrets) override the upstreams; they default to the real hosts and only need setting for testing: `OPENAI_UPSTREAM`, `ANTHROPIC_UPSTREAM`, `GEMINI_UPSTREAM`.
 
-Use the worker URL in place of the upstream API. No API key needed in the request:
+## Admin dashboard
 
-```bash
-# Claude
-curl https://<your-worker>.workers.dev/v1/messages \
-  -H "content-type: application/json" \
-  -H "anthropic-version: 2023-06-01" \
-  -d '{"model": "claude-sonnet-4-5-20250929", "max_tokens": 256,
-       "messages": [{"role": "user", "content": "Hello"}]}'
-
-# Gemini
-curl https://<your-worker>.workers.dev/v1beta/models/gemini-3.1-flash-image-preview:generateContent \
-  -H "content-type: application/json" \
-  -d '{"contents": [{"parts": [{"text": "Hello"}]}]}'
-
-# OpenAI
-curl https://<your-worker>.workers.dev/v1/chat/completions \
-  -H "content-type: application/json" \
-  -d '{"model": "gpt-5.4", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
-## Disable / Enable
-
-Toggle or schedule a worker URL without deleting it:
-
-```bash
-./schedule.sh disable                             # disable Claude immediately
-./schedule.sh --gemini enable                     # enable Gemini immediately
-./schedule.sh disable 22:00                       # disable Claude at 10pm today
-./schedule.sh disable +30m                        # disable Claude in 30 minutes
-./schedule.sh --gemini disable "2026-03-03 01:00" # disable Gemini on a specific date
-./schedule.sh --openai disable 23:00              # disable OpenAI at 11pm
-```
-
-Time is optional — omit it to run immediately. For `HH:MM`, if the time has already passed today it schedules for tomorrow.
-
-## Cost
-
-Cloudflare Workers free tier covers this (100k requests/day, no credit card required). You only pay for API usage with the upstream providers.
+Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), and either type a token or generate one. The token is shown **once** at creation — copy it then; only its SHA-256 hash is stored. Disable or delete any token instantly.
 
 ## Security
 
-- API keys are stored as Cloudflare secrets (encrypted at rest, never in code)
-- Keys are only injected into outbound requests, never returned to callers
-- **Note:** Worker URLs are unauthenticated — anyone with the URL can use your API key (without seeing it). Keep URLs private or add a bearer token check
+- Real provider keys are Cloudflare secrets, injected only into outbound requests — never in KV, never returned to callers.
+- Tokens are stored as SHA-256 hashes; a KV/dashboard dump yields unusable hashes, not live tokens.
+- The worker strips all inbound auth headers before setting the real key, so a doppelganger token is never forwarded upstream.
+- Do not host the worker on a `*.openai.azure.com` / `*.cognitiveservices.azure.com` domain (the OpenAI SDK switches to Azure auth on those hostnames).
+
+## Testing
+
+Two tiers (Vitest):
+
+```bash
+nub run test:unit     # tier 1: proxy logic in workerd (vitest-pool-workers), fast CI gate
+nub run test:compat   # tier 2: real openai / @anthropic-ai/sdk / @google/genai SDKs vs a local worker + mock upstream
+nub run test          # both
+```
+
+Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, then drives each real SDK and asserts the forwarded request carries the real key (and never the token).
+
+## Disable / Enable
+
+`schedule.sh` toggles the worker's `workers_dev` URL without deleting it:
+
+```bash
+./schedule.sh disable          # now
+./schedule.sh disable +30m     # in 30 minutes
+./schedule.sh enable 22:00     # at 10pm
+```
+
+## Cost
+
+Cloudflare Workers free tier covers this (100k requests/day). You only pay upstream providers for API usage.
 
 ## Contributing
 

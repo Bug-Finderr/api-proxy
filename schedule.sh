@@ -2,7 +2,7 @@
 # Usage: ./schedule.sh [--claude|--gemini|--openai] <enable|disable> [HH:MM | YYYY-MM-DD HH:MM | +Nm]
 set -euo pipefail
 
-label="claude"; action=""; time_args=()
+label=""; action=""; time_args=()
 for arg in "$@"; do
   case "$arg" in
     --claude|--gemini|--openai) label="${arg#--}" ;;
@@ -10,7 +10,10 @@ for arg in "$@"; do
     *) time_args+=("$arg") ;;
   esac
 done
-config="wrangler.${label}.toml"
+# Default target is the single token-gated worker (wrangler.toml). The provider flags
+# still target the legacy per-provider workers during the transition.
+config="${label:+wrangler.${label}.toml}"; config="${config:-wrangler.toml}"
+name="${label:-api-proxy}"
 time_arg="${time_args[*]:-}"
 
 [[ "$action" =~ ^(enable|disable)$ ]] || {
@@ -23,7 +26,7 @@ dir=$(cd "$(dirname "$0")" && pwd)
 if [[ -z "$time_arg" ]]; then
   sed -i '' "s/workers_dev = $from/workers_dev = $to/" "$dir/$config"
   grep -q "workers_dev = $to" "$dir/$config" || { echo "ERROR: sed failed"; exit 1; }
-  cd "$dir" && bunx wrangler deploy --config "$config"
+  cd "$dir" && nubx wrangler deploy --config "$config"
   exit 0
 fi
 
@@ -39,15 +42,15 @@ else
   delay=$(( (target - now + 86400) % 86400 ))
 fi
 
-logfile="/tmp/${label}-proxy-schedule.log"
+logfile="/tmp/${name}-schedule.log"
 
-cat > "/tmp/${label}-proxy-scheduled.sh" <<SCRIPT
+cat > "/tmp/${name}-scheduled.sh" <<SCRIPT
 sleep $delay
 sed -i '' 's/workers_dev = $from/workers_dev = $to/' "$dir/$config"
 grep -q "workers_dev = $to" "$dir/$config" || { echo "ERROR: sed failed"; exit 1; }
-cd "$dir" && bunx wrangler deploy --config "$config"
+cd "$dir" && nubx wrangler deploy --config "$config"
 SCRIPT
 
-nohup bash "/tmp/${label}-proxy-scheduled.sh" > "$logfile" 2>&1 &
-echo "Scheduled $label $action in $((delay/3600))h $(( (delay%3600)/60 ))m (PID: $!)"
+nohup bash "/tmp/${name}-scheduled.sh" > "$logfile" 2>&1 &
+echo "Scheduled $name $action in $((delay/3600))h $(( (delay%3600)/60 ))m (PID: $!)"
 echo "  Cancel: kill $!  |  Logs: cat $logfile"
