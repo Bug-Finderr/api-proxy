@@ -1,7 +1,7 @@
 import { html, raw } from "hono/html";
 import type { TokenMetadata, CoarseProvider } from "../types";
 
-type Row = TokenMetadata & { hash: string };
+type Row = TokenMetadata & { hash: string; lastUsed?: string };
 
 const HTMX = "https://unpkg.com/htmx.org@2.0.9";
 
@@ -14,7 +14,7 @@ h1{font-size:20px;font-weight:600;margin:0 0 20px}
 .card{background:#15151c;border:1px solid #24242e;border-radius:12px;padding:18px;margin:0 0 18px}
 .card h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9a9aa6;margin:0 0 14px}
 label{display:block;font-size:12px;color:#9a9aa6;margin:0 0 4px}
-input[type=text]{width:100%;background:#0e0e14;border:1px solid #2a2a36;border-radius:8px;color:#e7e7ea;padding:9px 11px;font:inherit}
+input[type=text],input[type=password]{width:100%;background:#0e0e14;border:1px solid #2a2a36;border-radius:8px;color:#e7e7ea;padding:9px 11px;font:inherit}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
 .row>div{flex:1;min-width:160px}
 .checks{display:flex;gap:14px;margin:12px 0}
@@ -35,7 +35,7 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 `;
 
 const providerPills = (providers: CoarseProvider[]) =>
-	raw(providers.map((p) => `<span class="pill ${p}">${p}</span>`).join(""));
+	providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
 const timeAgo = (iso?: string) => {
 	if (!iso) return "never";
@@ -90,9 +90,9 @@ export const tokenTable = (rows: Row[]) => html`
 	</table>
 `;
 
-export const createdNotice = (token: string, row: Row) => html`
+export const createdNotice = (token: string) => html`
 	<div class="notice">
-		Token created. Copy it now — it is shown only once:
+		Token created. Copy it now - it is shown only once:
 		<code class="mono">${token}</code>
 	</div>
 `;
@@ -115,7 +115,7 @@ export const loginPage = () => html`<!doctype html>
 					<h2>Sign in</h2>
 					<form hx-post="/admin/login" hx-swap="none">
 						<label for="password">Admin password</label>
-						<input type="text" id="password" name="password" autocomplete="off" />
+						<input type="password" id="password" name="password" autocomplete="off" />
 						<div style="margin-top:12px"><button type="submit">Sign in</button></div>
 					</form>
 				</div>

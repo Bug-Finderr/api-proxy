@@ -41,12 +41,25 @@ export async function createToken(
 	return { token, hash, meta };
 }
 
+// lastUsed lives in its own key so stamping it never rewrites (and never resurrects)
+// the token record that the admin may be concurrently disabling.
+const luKey = (hash: string) => `${hash}:lu`;
+
+export type TokenRow = TokenMetadata & { hash: string; lastUsed?: string };
+
+function parseMeta(raw: string | null): TokenMetadata | null {
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as TokenMetadata;
+	} catch {
+		return null;
+	}
+}
+
 /** Resolve a token hash to its metadata, only if it exists and is active. */
 export async function getValidatedByHash(kv: KVNamespace, hash: string): Promise<TokenMetadata | null> {
-	const raw = await kv.get(hash);
-	if (!raw) return null;
-	const meta = JSON.parse(raw) as TokenMetadata;
-	return meta.status === "active" ? meta : null;
+	const meta = parseMeta(await kv.get(hash));
+	return meta?.status === "active" ? meta : null;
 }
 
 /** Resolve a plaintext token to its metadata, only if it exists and is active. */
@@ -54,14 +67,24 @@ export async function getValidated(kv: KVNamespace, token: string): Promise<Toke
 	return getValidatedByHash(kv, await sha256hex(token));
 }
 
-export async function listTokens(kv: KVNamespace): Promise<(TokenMetadata & { hash: string })[]> {
-	const { keys } = await kv.list();
-	const rows: (TokenMetadata & { hash: string })[] = [];
-	for (const k of keys) {
-		const raw = await kv.get(k.name);
-		if (raw) rows.push({ hash: k.name, ...(JSON.parse(raw) as TokenMetadata) });
-	}
-	return rows;
+export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
+	// Paginate so we never silently truncate at KV's 1000-key page limit.
+	const hashes: string[] = [];
+	let cursor: string | undefined;
+	do {
+		const res = await kv.list({ cursor });
+		for (const k of res.keys) if (!k.name.endsWith(":lu")) hashes.push(k.name);
+		cursor = res.list_complete ? undefined : res.cursor;
+	} while (cursor);
+
+	const rows = await Promise.all(
+		hashes.map(async (hash): Promise<TokenRow | null> => {
+			const [raw, lastUsed] = await Promise.all([kv.get(hash), kv.get(luKey(hash))]);
+			const meta = parseMeta(raw);
+			return meta ? { hash, ...meta, lastUsed: lastUsed ?? undefined } : null;
+		}),
+	);
+	return rows.filter((r): r is TokenRow => r !== null);
 }
 
 export async function updateToken(
@@ -69,21 +92,18 @@ export async function updateToken(
 	hash: string,
 	patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">>,
 ): Promise<TokenMetadata | null> {
-	const raw = await kv.get(hash);
-	if (!raw) return null;
-	const meta = { ...(JSON.parse(raw) as TokenMetadata), ...patch };
-	await kv.put(hash, JSON.stringify(meta));
-	return meta;
+	const meta = parseMeta(await kv.get(hash));
+	if (!meta) return null;
+	const updated = { ...meta, ...patch };
+	await kv.put(hash, JSON.stringify(updated));
+	return updated;
 }
 
 export async function deleteToken(kv: KVNamespace, hash: string): Promise<void> {
-	await kv.delete(hash);
+	await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
 }
 
 export async function touchLastUsed(kv: KVNamespace, hash: string): Promise<void> {
-	const raw = await kv.get(hash);
-	if (!raw) return;
-	const meta = JSON.parse(raw) as TokenMetadata;
-	meta.lastUsed = new Date().toISOString();
-	await kv.put(hash, JSON.stringify(meta));
+	// Write only the side key; never touch the token record (avoids resurrecting a revoke).
+	await kv.put(luKey(hash), new Date().toISOString());
 }

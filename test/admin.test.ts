@@ -96,6 +96,18 @@ describe("admin token CRUD", () => {
 		expect(await getValidated(env.TOKENS, "to-delete")).toBeNull();
 	});
 
+	it("rejects a malformed token id on PUT and DELETE", async () => {
+		const cookie = await login();
+		const put = await call("/admin/api/tokens/not-a-hash", {
+			method: "PUT",
+			headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+			body: "status=disabled",
+		});
+		expect(put.status).toBe(400);
+		const del = await call("/admin/api/tokens/xyz", { method: "DELETE", headers: { cookie } });
+		expect(del.status).toBe(400);
+	});
+
 	it("supports multiple providers from repeated form fields", async () => {
 		const cookie = await login();
 		await call("/admin/api/tokens", {

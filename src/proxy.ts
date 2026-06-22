@@ -1,4 +1,4 @@
-// The proxy hot-path. ZERO framework deps — pure functions + a fetch handler.
+// The proxy hot-path. ZERO framework deps - pure functions + a fetch handler.
 // MUST NOT import Hono or any admin code.
 import type { Provider, CoarseProvider, Env } from "./types";
 import { getValidatedByHash, touchLastUsed, sha256hex } from "./tokens";
@@ -94,7 +94,12 @@ export async function handleProxy(req: Request, env: Env, ctx: ExecutionContext)
 	const headers = new Headers(req.headers);
 	swapAuth(headers, provider, realKey);
 
-	const upstream = await fetch(new Request(url.toString(), { method: req.method, headers, body: req.body }));
+	let upstream: Response;
+	try {
+		upstream = await fetch(new Request(url.toString(), { method: req.method, headers, body: req.body }));
+	} catch {
+		return errorResponse(502, "upstream request failed");
+	}
 
 	ctx.waitUntil(touchLastUsed(env.TOKENS, hash));
 	return new Response(upstream.body, upstream);

@@ -86,4 +86,11 @@ describe("touchLastUsed", () => {
 		expect(row?.lastUsed).toBeTruthy();
 		expect(row?.label).toBe("tu");
 	});
+
+	it("does not resurrect a disabled token when lastUsed is stamped", async () => {
+		const { token, hash } = await createToken(env.TOKENS, { label: "rev", providers: ["openai"], token: "to-revoke" });
+		await updateToken(env.TOKENS, hash, { status: "disabled" });
+		await touchLastUsed(env.TOKENS, hash); // must not re-enable the revoked token
+		expect(await getValidated(env.TOKENS, token)).toBeNull();
+	});
 });
