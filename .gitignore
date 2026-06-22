@@ -27,6 +27,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 
+# wrangler local state / build cache
+.wrangler
+
+# playwright artifacts
+.playwright-mcp
+
 # IntelliJ based IDEs
 .idea
 
@@ -34,3 +40,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 CLAUDE.md
+
+# claude local settings
+.claude/settings.local.json
