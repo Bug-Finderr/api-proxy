@@ -175,7 +175,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body">
+					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body, every 10s">
 						Loading…
 					</div>
 				</div>

@@ -33,6 +33,8 @@ curl https://<worker>/v1/chat/completions \
   -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
+Browser SDKs work too — the worker answers the CORS preflight and reflects the request Origin. Provider browser opt-ins still apply (e.g. Anthropic's `dangerouslyAllowBrowser`).
+
 ## Setup
 
 ```bash
@@ -55,7 +57,13 @@ Optional plain vars (NOT secrets) override the upstreams; they default to the re
 
 ## Admin dashboard
 
-Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), and either type a token or generate one. The token is shown **once** at creation — copy it then; only its SHA-256 hash is stored. Disable or delete any token instantly.
+Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token or generate one. The token is shown **once** at creation — copy it then; only its SHA-256 hash is stored. Disable or delete any token instantly.
+
+## Per-token controls
+
+- **Expiry** — optionally set an expiry at creation; past it the token is rejected and the dashboard shows it as `expired`.
+- **Rate limit** — each token is capped at 100 requests / 60s (`429` + `Retry-After` over the limit). Tune `[[ratelimits]]` in `wrangler.toml`. It is a per-colo, loose ceiling for abuse protection, not a strict quota.
+- **Scope & revoke** — a token only reaches the providers you check; disable or delete to revoke (KV propagation is up to ~60s).
 
 ## Security
 
@@ -76,16 +84,16 @@ nub run test          # both
 
 Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, then drives each real SDK and asserts the forwarded request carries the real key (and never the token).
 
-> **Gemini is mock-tested only.** No test hits a live provider API — all three run against the mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet. The Gemini route has never run against the real Google Generative Language API, so treat it as built-but-unproven until a key is added.
+> **Gemini is untested with the actual API.** No test hits a live provider — all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet, so the Gemini route has never run against the real Google Generative Language API. Treat it as built-but-unproven until a key is added.
 
 ## Disable / Enable
 
-`schedule.sh` toggles the worker's `workers_dev` URL without deleting it:
+`_legacy/schedule.sh` (a kept-aside helper) toggles the worker's `workers_dev` URL without deleting it:
 
 ```bash
-./schedule.sh disable          # now
-./schedule.sh disable +30m     # in 30 minutes
-./schedule.sh enable 22:00     # at 10pm
+_legacy/schedule.sh disable          # now
+_legacy/schedule.sh disable +30m     # in 30 minutes
+_legacy/schedule.sh enable 22:00     # at 10pm
 ```
 
 ## Cost

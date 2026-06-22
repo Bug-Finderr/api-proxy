@@ -10,9 +10,9 @@ for arg in "$@"; do
     *) time_args+=("$arg") ;;
   esac
 done
-# Default target is the single token-gated worker (wrangler.toml). The provider flags
-# still target the legacy per-provider workers during the transition.
-config="${label:+wrangler.${label}.toml}"; config="${config:-wrangler.toml}"
+# Archived helper (kept aside in _legacy/). Default target is the active token-gated worker at the
+# repo root (wrangler.toml); the provider flags target the archived v1 workers in _legacy/v1/.
+config="${label:+_legacy/v1/wrangler.${label}.toml}"; config="${config:-wrangler.toml}"
 name="${label:-api-proxy}"
 time_arg="${time_args[*]:-}"
 
@@ -21,7 +21,7 @@ time_arg="${time_args[*]:-}"
 }
 
 [[ "$action" == "enable" ]] && from=false to=true || from=true to=false
-dir=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "$(dirname "$0")/.." && pwd) # repo root (this script lives in _legacy/)
 
 if [[ -z "$time_arg" ]]; then
   sed -i '' "s/workers_dev = $from/workers_dev = $to/" "$dir/$config"
