@@ -21,28 +21,27 @@ token-gated worker.
 
 One worker, dispatched by path (`src/index.ts`):
 
-```
-/admin/*   →  Hono admin sub-app   (wrapped in try/catch → 500)
-*          →  handleProxy()        (framework-free hot path)
-```
-
-The admin sub-app is isolated in a `try/catch` so an admin bug can never crash the proxy branch. The
-proxy hot path imports **no framework** — pure functions plus a `fetch` handler (`src/proxy.ts` must
-never import Hono).
+- **`/admin/*`** → the Hono admin sub-app, wrapped in `try/catch` (→ 500) so an admin bug can never
+  crash the proxy branch.
+- **everything else** → `handleProxy`, the framework-free hot path (`src/proxy.ts` must never import
+  Hono — it is pure functions plus a `fetch` handler).
 
 ## 3. Request flow (proxy hot path)
 
-`handleProxy` is a thin wrapper: it answers `OPTIONS` preflights (§8) and reflects `Origin` on every
-response. Everything else runs `proxyRequest`:
+`handleProxy` is a thin wrapper: it answers an `OPTIONS` preflight directly, otherwise runs
+`proxyRequest` and reflects CORS headers onto the result (§8). `proxyRequest`:
 
-1. **Extract + route** — read the token from its auth slot, pick the provider from that slot (+ path) (§4). No token or provider → **401**.
-2. **Validate** — `getValidatedByHash(SHA-256(token))`; must be active and unexpired (§6). Else → **401**.
-3. **Scope** — `coarse(provider)` must be in the token's `providers`. Else → **403**.
-4. **Rate limit** — `RATE_LIMITER.limit({ key: hash })`, per-token, fail-open (§7). Over the limit → **429** + `Retry-After`.
-5. **Rewrite** — swap protocol/host/port only; strip `?key=` for Gemini (§12).
-6. **Swap auth** — strip every inbound auth header, set the one real key (§5).
-7. **Forward** — `fetch` the upstream; OpenAI retries via the egress DO on a geo-403 (§9).
-8. **Return** — stream the response back unbuffered (SSE preserved); `ctx.waitUntil(touchLastUsed)` (§6).
+1. **Extract** the token from whichever auth slot it arrived in and **route** the provider from that
+   slot (+ path); missing either → **401**. (§4)
+2. **Validate** `SHA-256(token)` against KV — a miss, a disabled token, or an expired one → **401**. (§6)
+3. Requested provider not in the token's scope → **403**. (§4)
+4. **Rate-limit** on the hash — over the cap → **429** + `Retry-After` (fail-open). (§7)
+5. **Rewrite** the URL to the upstream — protocol/host/port only; strip `?key=` for Gemini. (§12)
+6. **Swap auth** — strip every inbound auth header, set the one real key. (§5)
+7. **Fetch** the upstream (OpenAI adds a geo-403 fallback, §9), stream the response back unbuffered,
+   and stamp `lastUsed` fire-and-forget. (§6, §9)
+
+Path and query forward verbatim; only protocol/host/port change.
 
 ## 4. Provider routing (by auth header)
 
@@ -103,9 +102,9 @@ type TokenMetadata = {
   `expiresAt` is set, it parses to a future timestamp — malformed or past expiry is rejected
   **fail-closed**. Not KV `expirationTtl` (60s floor, silently deletes the record, orphans the `:lu`
   key) — see [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
-- **`lastUsed`** lives in a separate `<hash>:lu` key, written fire-and-forget per proxied request.
-  Keeping it out of the token record means stamping it can never resurrect or re-enable a token the
-  admin just disabled or deleted.
+- **`lastUsed`** lives in a separate `<hash>:lu` key, written fire-and-forget on each proxied
+  request. Keeping it out of the token record means stamping it can never resurrect or re-enable a
+  token the admin just disabled or deleted.
 - **Lifecycle:** `createToken`, `listTokens` (paginates KV, skips `:lu` keys), `updateToken`
   (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s),
   so revoke and new-token visibility can lag.
@@ -113,8 +112,8 @@ type TokenMetadata = {
 ## 7. Per-token rate limiting
 
 After validation, `RATE_LIMITER.limit({ key: hash })` (the Workers Rate Limiting binding) caps each
-token. Over the limit → `429` + `Retry-After: 60`, wrapped in try/catch and **fail-open** so a
-missing or erroring binding can never brick the proxy.
+token. Over the limit → `429` + `Retry-After: 60`. Wrapped in try/catch and **fail-open**: a missing
+or erroring binding must never brick the proxy.
 
 ```toml
 [[ratelimits]]
@@ -133,46 +132,49 @@ loose ceiling for abuse protection, not a strict quota. Verified to run on the F
 
 `handleProxy` short-circuits `OPTIONS` to a `204` preflight **before** the token checks (a preflight
 carries no auth header, so it would otherwise 401 and block every browser SDK). The preflight
-reflects the request `Origin` and the requested `Access-Control-Request-Headers`, and sets
+reflects the request `Origin`, reflects the requested `Access-Control-Request-Headers`, and sets
 `Access-Control-Max-Age: 86400`. Every real response then passes through `withCors`, which reflects
-`Origin` and exposes the Gemini resumable-upload headers (`x-goog-upload-url`, `x-goog-upload-status`,
-`x-goog-upload-chunk-granularity`). No `Origin` → no CORS headers (server-side callers unaffected).
-Credentials mode is never enabled (SDKs send keys as headers, not cookies). Provider browser opt-ins
-still apply (e.g. Anthropic's `dangerouslyAllowBrowser`, which the SDK forwards as a header).
+`Origin` and exposes the Gemini resumable-upload headers
+(`x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity`). No `Origin` → no CORS
+headers (server-side callers are unaffected). Credentials mode is never enabled (SDKs send keys as
+headers, not cookies). Provider browser opt-ins still apply (e.g. Anthropic's
+`dangerouslyAllowBrowser`, which the SDK forwards as a header).
 
 **Gemini file uploads** pass through verbatim: the start call routes normally, Google returns an
 absolute, self-authenticating `x-goog-upload-url`, and the client uploads bytes **directly to
-Google** — that leg never transits the worker, so the 100 MB body cap is sidestepped and the real key
-is never on it.
+Google** — that leg never transits the worker, so the 100 MB body cap is sidestepped and the real
+key is never on it.
 
 ## 9. OpenAI geo-403 egress (North-America-pinned Durable Object)
 
 OpenAI 403s `unsupported_country_region_territory` when a request egresses from an unsupported colo
 (e.g. Hong Kong). A Worker's `fetch()` egresses from the colo the invocation runs in, fixed per
-invocation, so an in-invocation retry can't escape a bad colo. The fix:
+invocation, so an in-invocation retry can't escape a bad colo.
 
-1. Direct edge `fetch` → `200` → return (the fast path, ~60% of calls).
-2. On a geo-403 **only** → re-issue through the `wnam`-pinned `UsEgress` DO — a SQLite Durable Object that runs in North America, so its `fetch()` egresses from a supported region → `200` → return.
-
-Only the OpenAI branch buffers the body (so it can be replayed to the DO); a pool of DO ids spreads
-load. Anthropic and Gemini are untouched, and the real key never leaves Cloudflare. See
-[`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
+The fix is a fallback: try the fast edge `fetch()` first (the ~60% that egress from a good colo
+return immediately); **only on the geo-403**, re-issue the same request through the `UsEgress` SQLite
+Durable Object pinned to North America (`locationHint: "wnam"`). Running in a US colo, its `fetch()`
+egresses from a supported region and succeeds. Only the OpenAI branch buffers the body (to replay it
+to the DO); a pool of DO ids spreads load. Anthropic and Gemini are untouched, and the real key never
+leaves Cloudflare. See [`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
 
 ## 10. Admin dashboard
 
 Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus
-**HTMX 2.x** from a CDN (no client JS we author; nothing in the worker bundle but markup + attributes).
+**HTMX 2.x** loaded from a CDN (zero client JS we author; nothing in the worker bundle but markup +
+attributes).
 
 - **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` sets an HMAC-SHA256-signed cookie
   `cm_admin=<ts>.<sig>` (`HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards
-  every `/admin/*` route except login; the signature is checked with constant-time `crypto.subtle.verify`.
-- **CRUD:** HTMX-driven over `/admin/api/tokens` — list (`GET`), create (`POST`; label, provider
-  checkboxes, optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated token),
-  edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
-- **UI:** an add-token card and a token table (label, last-4, provider pills, status, expires,
-  last-used, disable/delete). The plaintext is shown once; expired tokens render `expired` and dim
-  the row. The list refreshes on load, on `tokens-changed`, and **every 10 s** (to surface new
-  tokens / last-used despite KV's ~60 s list propagation).
+  every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`.
+- **CRUD:** HTMX-driven over `/admin/api/tokens` — list (`GET`), create (`POST`; parses label,
+  provider checkboxes, an optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated
+  token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
+- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token
+  table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created
+  plaintext is shown once; expired tokens render `expired` and dim the row. The list refreshes on
+  load, on the `tokens-changed` event, and **every 10 s** (to surface new tokens / last-used despite
+  KV's ~60 s list propagation).
 
 ## 11. Real key handling
 
@@ -234,6 +236,6 @@ Caveats:
 ## 16. Deferred / future
 
 The token data model leaves room (`limits`, `spend`) without carrying the weight now: spend /
-token-count caps + per-token usage analytics (a metering Durable Object + SSE usage parsing), multiple
-real keys per provider (key pools), concurrency limits and longer rate-limit windows, and instant
-(sub-minute) revocation via a DO allow/deny list.
+token-count caps + per-token usage analytics (needs a metering Durable Object and SSE usage parsing),
+multiple real keys per provider (key pools), concurrency limits and longer rate-limit windows, and
+instant (sub-minute) revocation via a DO allow/deny list.
