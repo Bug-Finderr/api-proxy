@@ -1,8 +1,8 @@
-# Doppelganger token security
+# Proxy token security
 
 ## Idea
 
-A "doppelganger" token is a shareable, revocable stand-in for a real provider key. The holder puts it
+A proxy token is a shareable, revocable stand-in for a real provider key. The holder puts it
 in the normal SDK auth slot; the proxy validates it, then swaps in the real key. You can hand someone
 access without exposing your OpenAI/Anthropic/Gemini key, and revoke it any time.
 
@@ -29,7 +29,7 @@ auth slot = <token>  ──▶  extract token from auth slot
 
 - **Strip-all-then-set-one.** Before forwarding, delete *every* inbound auth header
   (`authorization`, `x-api-key`, `x-goog-api-key`) and set exactly one with the real key
-  (`src/proxy.ts` `swapAuth`). This guarantees the doppelganger token is never forwarded upstream,
+  (`src/proxy.ts` `swapAuth`). This guarantees the proxy token is never forwarded upstream,
   even if a client sends it in an unexpected slot. A test asserts the token never appears in any
   outbound auth header.
 

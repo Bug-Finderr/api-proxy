@@ -44,4 +44,4 @@ Auth-slot routing keeps each SDK's native path intact, so it stays a true drop-i
 
 Route by auth header. The token is extracted from the same slot, validated, and then **all** inbound
 auth headers are stripped and exactly one real key is set for the chosen provider (see
-[doppelganger-token-security.md](doppelganger-token-security.md)).
+[proxy-token-security.md](proxy-token-security.md)).

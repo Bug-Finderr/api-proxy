@@ -174,7 +174,7 @@ describe("auth failures (upstream never called)", () => {
 });
 
 describe("security invariant", () => {
-  it("never forwards the doppelganger token upstream", async () => {
+  it("never forwards the proxy token upstream", async () => {
     await createToken(env.TOKENS, {
       label: "sec",
       providers: ["openai"],

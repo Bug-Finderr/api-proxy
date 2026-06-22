@@ -18,9 +18,9 @@ function base64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** A fresh opaque token: dgk_ + 32 url-safe chars (24 random bytes). */
+/** A fresh opaque token: ptk_ + 32 url-safe chars (24 random bytes). */
 export function generateToken(): string {
-  return `dgk_${base64url(crypto.getRandomValues(new Uint8Array(24)))}`;
+  return `ptk_${base64url(crypto.getRandomValues(new Uint8Array(24)))}`;
 }
 
 export interface CreateInput {

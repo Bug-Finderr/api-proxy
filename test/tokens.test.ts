@@ -21,8 +21,8 @@ describe("sha256hex", () => {
 });
 
 describe("generateToken", () => {
-  it("has the dgk_ prefix and a url-safe body", () => {
-    expect(generateToken()).toMatch(/^dgk_[A-Za-z0-9_-]{32,}$/);
+  it("has the ptk_ prefix and a url-safe body", () => {
+    expect(generateToken()).toMatch(/^ptk_[A-Za-z0-9_-]{32,}$/);
   });
   it("is unique across calls", () => {
     expect(generateToken()).not.toBe(generateToken());
@@ -35,7 +35,7 @@ describe("createToken + getValidated", () => {
       label: "alice",
       providers: ["openai"],
     });
-    expect(token).toMatch(/^dgk_/);
+    expect(token).toMatch(/^ptk_/);
     expect(meta.last4).toBe(token.slice(-4));
     const got = await getValidated(env.TOKENS, token);
     expect(got?.label).toBe("alice");

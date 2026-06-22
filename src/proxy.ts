@@ -104,7 +104,7 @@ function egressStub(env: Env): DurableObjectStub {
   return env.US_EGRESS.get(id, { locationHint: "wnam" });
 }
 
-/** Validate the doppelganger token, swap in the real key, forward to the upstream, stream back. */
+/** Validate the proxy token, swap in the real key, forward to the upstream, stream back. */
 export async function handleProxy(
   req: Request,
   env: Env,

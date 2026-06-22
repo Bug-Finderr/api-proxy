@@ -1,8 +1,8 @@
-# api-proxy — Doppelganger Tokens Design
+# api-proxy — Proxy Tokens Design
 
 - **Date:** 2026-06-22
 - **Status:** Approved; implementation in progress
-- **Scope:** Replace the three transparent reverse-proxy workers with one token-gated worker plus an embedded admin dashboard. Issue shareable, revocable "doppelganger" API-key tokens that map to real provider keys server-side.
+- **Scope:** Replace the three transparent reverse-proxy workers with one token-gated worker plus an embedded admin dashboard. Issue shareable, revocable proxy API-key tokens that map to real provider keys server-side.
 
 > Naming: there is no "v1/v2" product split. This is the `api-proxy` project evolving. The new token-gated worker deploys under its own worker name so it can run alongside the existing transparent proxies during validation; the old `src/{claude,openai,gemini}.ts` files and their tomls are deleted once the new worker is reliable.
 
@@ -16,7 +16,7 @@ We want: hand someone a token they plug into their normal SDK (changing only the
 
 ## 2. Goals
 
-- A consumer uses their existing SDK by changing **two things**: the base URL (point at the worker) and the API key (use a doppelganger token).
+- A consumer uses their existing SDK by changing **two things**: the base URL (point at the worker) and the API key (use a proxy token).
 - The owner mints, scopes (per provider), disables, and deletes tokens from an admin dashboard.
 - Real provider keys never leave the worker and never live in KV.
 - Support OpenAI, Anthropic, and Google Gemini, including streaming, for server-side SDK usage.
@@ -29,7 +29,7 @@ Rate limits, spend/token caps, expiry dates, per-token usage analytics, browser/
 
 | Decision | Choice | Why |
 |---|---|---|
-| Mechanism | Doppelganger token = the API key the SDK already sends. Worker reads it from the auth header, validates against KV, swaps in the real key. | Unifies "shareable key" and "common-ground SDK config"; client changes only base URL + key. |
+| Mechanism | Proxy token = the API key the SDK already sends. Worker reads it from the auth header, validates against KV, swaps in the real key. | Unifies "shareable key" and "common-ground SDK config"; client changes only base URL + key. |
 | Topology | One worker, one base URL, **no provider path prefix**. Provider routing by which auth header the token arrives in (+ path for Gemini OpenAI-compat). | A `/openai` `/anthropic` `/gemini` prefix breaks Gemini native file uploads. The auth header already identifies the provider. |
 | Architecture | **Single worker, embedded.** Top-level dispatch: `/admin/*` → Hono admin sub-app (wrapped in try/catch); everything else → framework-free proxy hot-path. | Proxy requests pay zero routing/SSR cost. Avoids two deploys / two secret sets / broken `schedule.sh`. Escape hatch: move `src/admin/*` to a second worker on the same KV namespace if it ever outgrows CRUD. |
 | Token storage | Store **SHA-256(token)** in KV; show plaintext once at creation; dashboard shows label + last-4. | Foundational, hard to retrofit. A KV/dashboard dump yields unusable hashes. Standard practice. |
@@ -56,7 +56,7 @@ fetch(req, env, ctx):
 src/
   index.ts        # fetch entry + dispatch
   proxy.ts        # ZERO framework deps: extractToken, routeProvider, swapAuth, stream passthrough. MUST NOT import Hono.
-  tokens.ts       # KV helpers: sha256hex, generateToken (dgk_ + 32 base64url), create, list, getValidated, update, delete, touchLastUsed
+  tokens.ts       # KV helpers: sha256hex, generateToken (ptk_ + 32 base64url), create, list, getValidated, update, delete, touchLastUsed
   upstreams.ts    # UPSTREAM resolver: reads *_UPSTREAM env with real-host defaults; parses protocol+hostname+port (the test seam)
   types.ts        # shared TokenMetadata, Provider types (imported by proxy + admin)
   admin/
@@ -124,7 +124,7 @@ switch (provider) {
 }
 ```
 
-Stripping-all-then-setting-one prevents the doppelganger token leaking upstream and closes the Anthropic dual-header leak and the duplicate-`x-goog-api-key` 401.
+Stripping-all-then-setting-one prevents the proxy token leaking upstream and closes the Anthropic dual-header leak and the duplicate-`x-goog-api-key` 401.
 
 ## 7. Token model & lifecycle
 
@@ -142,7 +142,7 @@ type TokenMetadata = {
 };
 ```
 
-- **Create:** admin supplies label + provider scopes, types a token or clicks generate (`dgk_` + 32 random base64url from `crypto.getRandomValues`). Worker stores `sha256hex(token) -> metadata`, returns the **plaintext once**. Never retrievable again.
+- **Create:** admin supplies label + provider scopes, types a token or clicks generate (`ptk_` + 32 random base64url from `crypto.getRandomValues`). Worker stores `sha256hex(token) -> metadata`, returns the **plaintext once**. Never retrievable again.
 - **List/Update/Delete:** by hash. Update edits label, providers, status (`active` ⇄ `disabled`).
 - **last-used:** fire-and-forget KV write on each successful proxied request.
 
@@ -179,14 +179,14 @@ Do not test proxy logic and real-SDK HTTP behavior with one tool — conflating 
 
 **Tier 1 — proxy logic (always-on CI gate, ~1s):** `@cloudflare/vitest-pool-workers` inside workerd (`vitest.config.ts`).
 - Seed KV directly: `env.TOKENS.put(sha256hex(token), JSON.stringify(meta))`.
-- Capture the outbound call with `vi.spyOn(globalThis, "fetch")`; assert: (a) right upstream host, (b) real key swapped in AND doppelganger token absent (`.not.toContain(token)` on all three header slots), (c) path+query verbatim, (d) 401 on missing/invalid/revoked, 403 on provider-scope mismatch.
+- Capture the outbound call with `vi.spyOn(globalThis, "fetch")`; assert: (a) right upstream host, (b) real key swapped in AND proxy token absent (`.not.toContain(token)` on all three header slots), (c) path+query verbatim, (d) 401 on missing/invalid/revoked, 403 on provider-scope mismatch.
 - SSE: mocked fetch returns a `ReadableStream` `text/event-stream`; drive via `createExecutionContext()`/`waitOnExecutionContext()`; read `response.body.getReader()` chunk-by-chunk; assert content-type preserved and chunks un-buffered. Tier 1 does not use the upstream env seam (it mocks fetch entirely).
 
 **Tier 2 — real-SDK compatibility (feature-branch + pre-deploy, ~10-20s):** `vitest.compat.config.ts`, Node pool, `--pool=forks`, serial.
 - `wrangler unstable_startWorker` starts a real HTTP listener (not the deprecated `unstable_dev`).
 - A `node:http` mock upstream captures the raw inbound request; point the worker's `*_UPSTREAM` env at it (the seam earns its keep).
 - Seed the token via the worker's own `POST /admin/api/tokens` (also exercises create).
-- Run the real `openai`, `@anthropic-ai/sdk`, `@google/genai` packages with `baseURL` = local worker and `apiKey` = doppelganger token. Assert on the captured request: real key present, doppelganger absent, exact path the SDK constructed (catches `:generateContent`, `/v1beta/openai`).
+- Run the real `openai`, `@anthropic-ai/sdk`, `@google/genai` packages with `baseURL` = local worker and `apiKey` = proxy token. Assert on the captured request: real key present, proxy token absent, exact path the SDK constructed (catches `:generateContent`, `/v1beta/openai`).
 - SSE: mock writes `text/event-stream` chunks; consume via the SDK's own stream iterator; assert on connection-start headers, not the buffered body (avoids mid-stream-disconnect races).
 
 **Flakiness guards:** Tier 2 serial (shared mutable capture state + port); never `await body.text()/json()` in the proxy path; use the SDK's stream iterator for completion, not `setTimeout`.

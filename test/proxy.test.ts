@@ -132,7 +132,7 @@ describe("swapAuth", () => {
     swapAuth(h, "gemini-openai", "REALKEY");
     expect(h.get("authorization")).toBe("Bearer REALKEY");
   });
-  it("never leaves the doppelganger token in any auth header", () => {
+  it("never leaves the proxy token in any auth header", () => {
     const h = new Headers({
       "x-api-key": "DOPPEL",
       authorization: "Bearer DOPPEL",

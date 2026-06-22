@@ -1,12 +1,12 @@
 # api-proxy
 
-A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs behind **revocable "doppelganger" tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
+A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs behind **revocable proxy tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
 
-The consumer changes only **two things** in their normal SDK: the base URL (point at your worker) and the API key (use a doppelganger token).
+The consumer changes only **two things** in their normal SDK: the base URL (point at your worker) and the API key (use a proxy token).
 
 ## How it works
 
-The doppelganger token rides in the SDK's normal auth slot. The worker reads it, validates it against KV, checks the token is scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included).
+The proxy token rides in the SDK's normal auth slot. The worker reads it, validates it against KV, checks the token is scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included).
 
 | Token arrives in | Provider | Upstream | Real key set as |
 |---|---|---|---|
@@ -17,7 +17,7 @@ The doppelganger token rides in the SDK's normal auth slot. The worker reads it,
 
 ## Client setup
 
-Point the SDK's base URL at the worker and use a doppelganger token as the key:
+Point the SDK's base URL at the worker and use a proxy token as the key:
 
 | SDK | base URL | key |
 |---|---|---|
@@ -61,7 +61,7 @@ Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: 
 
 - Real provider keys are Cloudflare secrets, injected only into outbound requests — never in KV, never returned to callers.
 - Tokens are stored as SHA-256 hashes; a KV/dashboard dump yields unusable hashes, not live tokens.
-- The worker strips all inbound auth headers before setting the real key, so a doppelganger token is never forwarded upstream.
+- The worker strips all inbound auth headers before setting the real key, so a proxy token is never forwarded upstream.
 - Do not host the worker on a `*.openai.azure.com` / `*.cognitiveservices.azure.com` domain (the OpenAI SDK switches to Azure auth on those hostnames).
 
 ## Testing
@@ -75,6 +75,8 @@ nub run test          # both
 ```
 
 Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, then drives each real SDK and asserts the forwarded request carries the real key (and never the token).
+
+> **Gemini is mock-tested only.** No test hits a live provider API — all three run against the mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet. The Gemini route has never run against the real Google Generative Language API, so treat it as built-but-unproven until a key is added.
 
 ## Disable / Enable
 
