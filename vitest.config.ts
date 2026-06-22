@@ -14,6 +14,7 @@ export default defineConfig({
 			miniflare: {
 				compatibilityDate: "2025-01-01",
 				kvNamespaces: ["TOKENS"],
+				durableObjects: { US_EGRESS: { className: "UsEgress", useSQLite: true } },
 				bindings: {
 					// FAKE real-keys for tests. Real keys live in .env / CF secrets, never here.
 					OPENAI_API_KEY: "real-openai-key-FAKE",

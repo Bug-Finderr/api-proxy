@@ -4,11 +4,22 @@ compatibility_date = "2025-01-01"
 workers_dev = true
 preview_urls = false
 
-# Token store. Create with: nubx wrangler kv namespace create TOKENS
+# Token store. Create with: nubx wrangler kv namespace create api-proxy-tokens
 # then paste the returned id below before deploy. Local dev/tests use an in-memory namespace.
+# Dedicated to api-proxy — must NOT be shared with any other worker.
 [[kv_namespaces]]
 binding = "TOKENS"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Region-pinned egress relay (SQLite Durable Object, free plan). OpenAI calls that hit a
+# geo-blocked egress colo are re-issued through this DO via locationHint:"wnam" (North America).
+[[durable_objects.bindings]]
+name = "US_EGRESS"
+class_name = "UsEgress"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsEgress"]
 
 # Secrets (set with `nubx wrangler secret put <NAME>`), never committed:
 #   OPENAI_API_KEY  ANTHROPIC_API_KEY  GEMINI_API_KEY  ADMIN_SECRET

@@ -75,6 +75,24 @@ function errorResponse(status: number, error: string): Response {
 	});
 }
 
+const EGRESS_POOL = 8;
+
+/** OpenAI 403s requests that egress from an unsupported region (e.g. the Hong Kong colo). */
+async function isGeoBlock(res: Response): Promise<boolean> {
+	if (res.status !== 403) return false;
+	try {
+		return (await res.clone().text()).includes("unsupported_country_region_territory");
+	} catch {
+		return false;
+	}
+}
+
+/** A North-America-pinned egress stub, so its fetch() leaves from an OpenAI-supported region. */
+function egressStub(env: Env): DurableObjectStub {
+	const id = env.US_EGRESS.idFromName(`oa-egress-${Math.floor(Math.random() * EGRESS_POOL)}`);
+	return env.US_EGRESS.get(id, { locationHint: "wnam" });
+}
+
 /** Validate the doppelganger token, swap in the real key, forward to the upstream, stream back. */
 export async function handleProxy(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(req.url);
@@ -93,10 +111,23 @@ export async function handleProxy(req: Request, env: Env, ctx: ExecutionContext)
 
 	const headers = new Headers(req.headers);
 	swapAuth(headers, provider, realKey);
+	const target = url.toString();
+	const hasBody = req.method !== "GET" && req.method !== "HEAD";
 
 	let upstream: Response;
 	try {
-		upstream = await fetch(new Request(url.toString(), { method: req.method, headers, body: req.body }));
+		if (coarse(provider) === "openai") {
+			// Buffer the body so the request can be re-issued through the egress DO. The edge
+			// colo this invocation egresses from is fixed, so an in-invocation retry is useless;
+			// only re-issuing from a region-pinned DO escapes a geo-blocked colo.
+			const body = hasBody ? await req.arrayBuffer() : undefined;
+			upstream = await fetch(new Request(target, { method: req.method, headers, body }));
+			if (await isGeoBlock(upstream)) {
+				upstream = await egressStub(env).fetch(new Request(target, { method: req.method, headers, body }));
+			}
+		} else {
+			upstream = await fetch(new Request(target, { method: req.method, headers, body: req.body }));
+		}
 	} catch {
 		return errorResponse(502, "upstream request failed");
 	}

@@ -148,6 +148,87 @@ describe("security invariant", () => {
 	});
 });
 
+describe("OpenAI geo-403 fallback via the US egress DO", () => {
+	const realEgress = env.US_EGRESS;
+	let egressCalls: Request[];
+	afterEach(() => {
+		(env as { US_EGRESS: typeof realEgress }).US_EGRESS = realEgress;
+	});
+
+	// Replace the DO namespace with a fake whose stub.fetch records the request and returns 200.
+	function fakeEgress() {
+		egressCalls = [];
+		const stub = {
+			fetch: async (r: Request) => {
+				egressCalls.push(r);
+				return new Response(JSON.stringify({ ok: "via-egress" }), { status: 200 });
+			},
+		};
+		(env as { US_EGRESS: unknown }).US_EGRESS = {
+			idFromName: () => ({}),
+			get: () => stub,
+		};
+	}
+
+	const geo403 = () =>
+		new Response(JSON.stringify({ error: { code: "unsupported_country_region_territory" } }), { status: 403 });
+
+	it("retries through the egress DO when OpenAI returns a geo-403, with the real key", async () => {
+		await seed("tk-geo", ["openai"]);
+		fakeEgress();
+		fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+			captured = input instanceof Request ? input : new Request(input, init);
+			return geo403();
+		});
+		const res = await call(
+			new Request("https://proxy.example/v1/chat/completions", {
+				method: "POST",
+				headers: { authorization: "Bearer tk-geo", "content-type": "application/json" },
+				body: JSON.stringify({ model: "gpt-x", messages: [{ role: "user", content: "hi" }] }),
+			}),
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: "via-egress" });
+		expect(egressCalls.length).toBe(1);
+		const sent = egressCalls[0];
+		expect(new URL(sent.url).hostname).toBe("api.openai.com");
+		expect(sent.headers.get("authorization")).toBe("Bearer real-openai-key-FAKE");
+		expect(await sent.text()).toContain("hi"); // buffered body survived to the retry
+	});
+
+	it("does NOT retry on a non-geo 403 (passes it through)", async () => {
+		await seed("tk-403", ["openai"]);
+		fakeEgress();
+		fetchSpy.mockImplementation(async () =>
+			new Response(JSON.stringify({ error: { code: "invalid_api_key" } }), { status: 403 }),
+		);
+		const res = await call(
+			new Request("https://proxy.example/v1/chat/completions", {
+				method: "POST",
+				headers: { authorization: "Bearer tk-403" },
+				body: "{}",
+			}),
+		);
+		expect(res.status).toBe(403);
+		expect(egressCalls.length).toBe(0);
+	});
+
+	it("never routes non-OpenAI providers through the egress DO", async () => {
+		await seed("tk-anth-geo", ["anthropic"]);
+		fakeEgress();
+		fetchSpy.mockImplementation(async () => geo403());
+		const res = await call(
+			new Request("https://proxy.example/v1/messages", {
+				method: "POST",
+				headers: { "x-api-key": "tk-anth-geo" },
+				body: "{}",
+			}),
+		);
+		expect(res.status).toBe(403); // anthropic 403 passes straight through
+		expect(egressCalls.length).toBe(0);
+	});
+});
+
 describe("SSE passthrough", () => {
 	it("streams text/event-stream chunks through without buffering", async () => {
 		await createToken(env.TOKENS, { label: "sse", providers: ["openai"], token: "tk-sse" });
