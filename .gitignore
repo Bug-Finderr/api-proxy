@@ -40,3 +40,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 CLAUDE.md
+
+# claude local settings
+.claude/settings.local.json

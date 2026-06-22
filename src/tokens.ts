@@ -1,44 +1,49 @@
 // KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown
 // once at creation and never persisted.
-import type { TokenMetadata, CoarseProvider } from "./types";
+import type { CoarseProvider, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
-	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-	return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function base64url(bytes: Uint8Array): string {
-	let bin = "";
-	for (const b of bytes) bin += String.fromCharCode(b);
-	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /** A fresh opaque token: dgk_ + 32 url-safe chars (24 random bytes). */
 export function generateToken(): string {
-	return "dgk_" + base64url(crypto.getRandomValues(new Uint8Array(24)));
+  return `dgk_${base64url(crypto.getRandomValues(new Uint8Array(24)))}`;
 }
 
 export interface CreateInput {
-	label: string;
-	providers: CoarseProvider[];
-	token?: string; // admin-typed; otherwise generated
+  label: string;
+  providers: CoarseProvider[];
+  token?: string; // admin-typed; otherwise generated
 }
 
 export async function createToken(
-	kv: KVNamespace,
-	input: CreateInput,
+  kv: KVNamespace,
+  input: CreateInput,
 ): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
-	const token = input.token?.trim() || generateToken();
-	const hash = await sha256hex(token);
-	const meta: TokenMetadata = {
-		label: input.label,
-		last4: token.slice(-4),
-		providers: input.providers,
-		status: "active",
-		createdAt: new Date().toISOString(),
-	};
-	await kv.put(hash, JSON.stringify(meta));
-	return { token, hash, meta };
+  const token = input.token?.trim() || generateToken();
+  const hash = await sha256hex(token);
+  const meta: TokenMetadata = {
+    label: input.label,
+    last4: token.slice(-4),
+    providers: input.providers,
+    status: "active",
+    createdAt: new Date().toISOString(),
+  };
+  await kv.put(hash, JSON.stringify(meta));
+  return { token, hash, meta };
 }
 
 // lastUsed lives in its own key so stamping it never rewrites (and never resurrects)
@@ -48,62 +53,77 @@ const luKey = (hash: string) => `${hash}:lu`;
 export type TokenRow = TokenMetadata & { hash: string; lastUsed?: string };
 
 function parseMeta(raw: string | null): TokenMetadata | null {
-	if (!raw) return null;
-	try {
-		return JSON.parse(raw) as TokenMetadata;
-	} catch {
-		return null;
-	}
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as TokenMetadata;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve a token hash to its metadata, only if it exists and is active. */
-export async function getValidatedByHash(kv: KVNamespace, hash: string): Promise<TokenMetadata | null> {
-	const meta = parseMeta(await kv.get(hash));
-	return meta?.status === "active" ? meta : null;
+export async function getValidatedByHash(
+  kv: KVNamespace,
+  hash: string,
+): Promise<TokenMetadata | null> {
+  const meta = parseMeta(await kv.get(hash));
+  return meta?.status === "active" ? meta : null;
 }
 
 /** Resolve a plaintext token to its metadata, only if it exists and is active. */
-export async function getValidated(kv: KVNamespace, token: string): Promise<TokenMetadata | null> {
-	return getValidatedByHash(kv, await sha256hex(token));
+export async function getValidated(
+  kv: KVNamespace,
+  token: string,
+): Promise<TokenMetadata | null> {
+  return getValidatedByHash(kv, await sha256hex(token));
 }
 
 export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
-	// Paginate so we never silently truncate at KV's 1000-key page limit.
-	const hashes: string[] = [];
-	let cursor: string | undefined;
-	do {
-		const res = await kv.list({ cursor });
-		for (const k of res.keys) if (!k.name.endsWith(":lu")) hashes.push(k.name);
-		cursor = res.list_complete ? undefined : res.cursor;
-	} while (cursor);
+  // Paginate so we never silently truncate at KV's 1000-key page limit.
+  const hashes: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await kv.list({ cursor });
+    for (const k of res.keys) if (!k.name.endsWith(":lu")) hashes.push(k.name);
+    cursor = res.list_complete ? undefined : res.cursor;
+  } while (cursor);
 
-	const rows = await Promise.all(
-		hashes.map(async (hash): Promise<TokenRow | null> => {
-			const [raw, lastUsed] = await Promise.all([kv.get(hash), kv.get(luKey(hash))]);
-			const meta = parseMeta(raw);
-			return meta ? { hash, ...meta, lastUsed: lastUsed ?? undefined } : null;
-		}),
-	);
-	return rows.filter((r): r is TokenRow => r !== null);
+  const rows = await Promise.all(
+    hashes.map(async (hash): Promise<TokenRow | null> => {
+      const [raw, lastUsed] = await Promise.all([
+        kv.get(hash),
+        kv.get(luKey(hash)),
+      ]);
+      const meta = parseMeta(raw);
+      return meta ? { hash, ...meta, lastUsed: lastUsed ?? undefined } : null;
+    }),
+  );
+  return rows.filter((r): r is TokenRow => r !== null);
 }
 
 export async function updateToken(
-	kv: KVNamespace,
-	hash: string,
-	patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">>,
+  kv: KVNamespace,
+  hash: string,
+  patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">>,
 ): Promise<TokenMetadata | null> {
-	const meta = parseMeta(await kv.get(hash));
-	if (!meta) return null;
-	const updated = { ...meta, ...patch };
-	await kv.put(hash, JSON.stringify(updated));
-	return updated;
+  const meta = parseMeta(await kv.get(hash));
+  if (!meta) return null;
+  const updated = { ...meta, ...patch };
+  await kv.put(hash, JSON.stringify(updated));
+  return updated;
 }
 
-export async function deleteToken(kv: KVNamespace, hash: string): Promise<void> {
-	await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
+export async function deleteToken(
+  kv: KVNamespace,
+  hash: string,
+): Promise<void> {
+  await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
 }
 
-export async function touchLastUsed(kv: KVNamespace, hash: string): Promise<void> {
-	// Write only the side key; never touch the token record (avoids resurrecting a revoke).
-	await kv.put(luKey(hash), new Date().toISOString());
+export async function touchLastUsed(
+  kv: KVNamespace,
+  hash: string,
+): Promise<void> {
+  // Write only the side key; never touch the token record (avoids resurrecting a revoke).
+  await kv.put(luKey(hash), new Date().toISOString());
 }

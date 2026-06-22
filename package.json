@@ -7,13 +7,17 @@
     "dev": "wrangler dev",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:compat": "vitest run --config vitest.compat.config.ts",
-    "test": "nub run test:unit && nub run test:compat"
+    "test": "nub run test:unit && nub run test:compat",
+    "lint": "tsc --noEmit && biome check --write --unsafe .",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@biomejs/biome": "^2.5.0",
     "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@cloudflare/workers-types": "^4.20260615.1",
     "@google/genai": "^2.8.0",
+    "lefthook": "^2.1.9",
     "openai": "^6.42.0",
     "vitest": "^4.1.9"
   },

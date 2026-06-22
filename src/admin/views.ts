@@ -1,5 +1,5 @@
 import { html, raw } from "hono/html";
-import type { TokenMetadata, CoarseProvider } from "../types";
+import type { CoarseProvider, TokenMetadata } from "../types";
 
 type Row = TokenMetadata & { hash: string; lastUsed?: string };
 
@@ -35,11 +35,11 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 `;
 
 const providerPills = (providers: CoarseProvider[]) =>
-	providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
+  providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
 const timeAgo = (iso?: string) => {
-	if (!iso) return "never";
-	return iso.slice(0, 10);
+  if (!iso) return "never";
+  return iso.slice(0, 10);
 };
 
 export const tokenRow = (r: Row) => html`

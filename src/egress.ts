@@ -8,7 +8,7 @@ import type { Env } from "./types";
 // locationHint:"wnam" makes the object run in North America; its outbound fetch() then egresses
 // from an OpenAI-supported region. The real key never leaves Cloudflare.
 export class UsEgress extends DurableObject<Env> {
-	override fetch(request: Request): Promise<Response> {
-		return fetch(request);
-	}
+  override fetch(request: Request): Promise<Response> {
+    return fetch(request);
+  }
 }
