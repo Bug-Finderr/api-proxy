@@ -11,3 +11,5 @@ Each file: the problem, what we found, and the decision we keep.
 - [openai-egress-geo-block.md](openai-egress-geo-block.md) - why OpenAI 403'd ~40% of the time, and the North-America-pinned Durable Object that fixes it
 - [provider-routing-by-auth-header.md](provider-routing-by-auth-header.md) - one base URL, no path prefix; route by which auth slot the SDK used
 - [proxy-token-security.md](proxy-token-security.md) - how a shareable token rides the SDK's auth slot without ever leaking the real key
+- [token-expiry-check-at-validate.md](token-expiry-check-at-validate.md) - why expiry is checked at read time, not via KV TTL, and fail-closed on bad input
+- [rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md) - the Workers Rate Limiting binding is free on the Free plan but a loose, per-colo ceiling

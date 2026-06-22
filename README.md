@@ -15,6 +15,8 @@ The proxy token rides in the SDK's normal auth slot. The worker reads it, valida
 | `x-goog-api-key` / `?key=` | Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
 | `Authorization: Bearer` + path `/v1beta/openai/*` | Gemini (OpenAI-compat) | `generativelanguage.googleapis.com` | `Authorization: Bearer` |
 
+For the full design — request flow, token model, rate limiting, the OpenAI egress fix, and the admin dashboard — see [docs/architecture.md](docs/architecture.md).
+
 ## Client setup
 
 Point the SDK's base URL at the worker and use a proxy token as the key:
@@ -86,20 +88,10 @@ Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `n
 
 > **Gemini is untested with the actual API.** No test hits a live provider — all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet, so the Gemini route has never run against the real Google Generative Language API. Treat it as built-but-unproven until a key is added.
 
-## Disable / Enable
-
-`_legacy/schedule.sh` (a kept-aside helper) toggles the worker's `workers_dev` URL without deleting it:
-
-```bash
-_legacy/schedule.sh disable          # now
-_legacy/schedule.sh disable +30m     # in 30 minutes
-_legacy/schedule.sh enable 22:00     # at 10pm
-```
-
 ## Cost
 
 Cloudflare Workers free tier covers this (100k requests/day). You only pay upstream providers for API usage.
 
 ## Contributing
 
-Issues are welcome. PRs are not accepted and will be auto-closed.
+Issues are welcome. External PRs are not accepted and will be auto-closed.
