@@ -2,40 +2,38 @@
 
 A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs behind **revocable proxy tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
 
-The consumer changes only **two things** in their normal SDK: the base URL (point at your worker) and the API key (use a proxy token).
+## Use it
 
-## How it works
+Works with the official **OpenAI**, **Anthropic**, and **Google GenAI** SDKs (Python and Node) — and, since the worker routes by auth header and forwards verbatim, with anything that speaks those APIs: the Vercel AI SDK, LangChain, LiteLLM, OpenAI-compatible tools, or raw `curl`. A client changes only **two things**: the base URL and the API key (a proxy token).
 
-The proxy token rides in the SDK's normal auth slot. The worker reads it, validates it against KV, checks the token is scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included).
-
-| Token arrives in | Provider | Upstream | Real key set as |
-|---|---|---|---|
-| `Authorization: Bearer` | OpenAI | `api.openai.com` | `Authorization: Bearer` |
-| `x-api-key` | Anthropic | `api.anthropic.com` | `x-api-key` |
-| `x-goog-api-key` / `?key=` | Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
-| `Authorization: Bearer` + path `/v1beta/openai/*` | Gemini (OpenAI-compat) | `generativelanguage.googleapis.com` | `Authorization: Bearer` |
-
-For the full design — request flow, token model, rate limiting, the OpenAI egress fix, and the admin dashboard — see [docs/architecture.md](docs/architecture.md).
-
-## Client setup
-
-Point the SDK's base URL at the worker and use a proxy token as the key:
-
-| SDK | base URL | key |
+| Client | base URL | API key |
 |---|---|---|
-| OpenAI (Python / Node) | `https://<worker>/v1` | token |
-| Anthropic (Python / Node) | `https://<worker>` (no `/v1`) | token |
-| Google `@google/genai` (Node) | `httpOptions.baseUrl = https://<worker>` | token |
-| Gemini from Python | point the **OpenAI** SDK at `https://<worker>/v1beta/openai` | token |
+| OpenAI SDK (Python / Node) | `https://<worker>/v1` | proxy token |
+| Anthropic SDK (Python / Node) | `https://<worker>` (no `/v1`) | proxy token |
+| Google `@google/genai` (Node) | `httpOptions.baseUrl = https://<worker>` | proxy token |
+| Gemini via the OpenAI SDK | `https://<worker>/v1beta/openai` | proxy token |
+
+```python
+# OpenAI SDK (Python); Node is identical
+from openai import OpenAI
+client = OpenAI(base_url="https://<worker>/v1", api_key="<proxy-token>")
+client.chat.completions.create(
+    model="gpt-5.4", messages=[{"role": "user", "content": "Hello"}])
+```
+
+Or raw HTTP:
 
 ```bash
-# OpenAI-style
 curl https://<worker>/v1/chat/completions \
-  -H "authorization: Bearer <token>" -H "content-type: application/json" \
+  -H "authorization: Bearer <proxy-token>" -H "content-type: application/json" \
   -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Browser SDKs work too — the worker answers the CORS preflight and reflects the request Origin. Provider browser opt-ins still apply (e.g. Anthropic's `dangerouslyAllowBrowser`).
+Browser apps work too — the worker answers the CORS preflight and reflects the request Origin (provider browser opt-ins still apply, e.g. Anthropic's `dangerouslyAllowBrowser`).
+
+## How it works
+
+The proxy token rides in the SDK's normal auth slot. The worker validates it, checks it's scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included). Routing is by which auth header the token arrives in — see [docs/architecture.md](docs/architecture.md) for the routing table and full design.
 
 ## Setup
 
