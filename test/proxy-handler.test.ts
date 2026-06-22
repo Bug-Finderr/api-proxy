@@ -387,3 +387,58 @@ describe("CORS", () => {
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });
+
+describe("rate limiting", () => {
+  const real = (env as { RATE_LIMITER?: unknown }).RATE_LIMITER;
+  afterEach(() => {
+    (env as { RATE_LIMITER?: unknown }).RATE_LIMITER = real;
+  });
+  const setLimiter = (
+    limit: (o: { key: string }) => Promise<{ success: boolean }>,
+  ) => {
+    (env as { RATE_LIMITER: unknown }).RATE_LIMITER = { limit };
+  };
+
+  it("429s with Retry-After when the limiter denies, without calling upstream", async () => {
+    await seed("tk-rl", ["anthropic"]);
+    setLimiter(async () => ({ success: false }));
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    expect(captured).toBeNull();
+  });
+
+  it("forwards when the limiter allows", async () => {
+    await seed("tk-rl-ok", ["anthropic"]);
+    setLimiter(async () => ({ success: true }));
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl-ok" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("fails open (forwards) when the limiter throws", async () => {
+    await seed("tk-rl-err", ["anthropic"]);
+    setLimiter(async () => {
+      throw new Error("limiter down");
+    });
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl-err" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+});

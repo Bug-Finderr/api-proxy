@@ -164,6 +164,21 @@ async function proxyRequest(
   if (!meta.providers.includes(coarse(provider)))
     return errorResponse(403, "token not allowed for provider");
 
+  // Per-token rate limit, keyed on the hash (in-process binding, not a subrequest).
+  // Fail-open: a missing or erroring limiter must never brick the proxy. The binding
+  // counts per-colo, so it is a loose ceiling, not strict abuse prevention.
+  let allowed = true;
+  try {
+    allowed = (await env.RATE_LIMITER.limit({ key: hash })).success;
+  } catch {
+    allowed = true;
+  }
+  if (!allowed) {
+    const res = errorResponse(429, "rate limit exceeded");
+    res.headers.set("retry-after", "60");
+    return res;
+  }
+
   const realKey = realKeyFor(provider, env);
   rewriteToUpstream(url, provider, env);
   if (provider === "gemini" || provider === "gemini-openai")

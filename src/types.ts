@@ -15,6 +15,7 @@ export interface TokenMetadata {
 export interface Env {
   TOKENS: KVNamespace;
   US_EGRESS: DurableObjectNamespace; // North-America-pinned egress relay (see egress.ts)
+  RATE_LIMITER: RateLimit; // per-token RPM limiter (Workers Rate Limiting binding)
   OPENAI_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;

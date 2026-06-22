@@ -21,6 +21,17 @@ class_name = "UsEgress"
 tag = "v1"
 new_sqlite_classes = ["UsEgress"]
 
+# Per-token request-rate limit (Workers Rate Limiting binding; in-process, not a subrequest).
+# Keyed on the token hash; one shared ceiling for all tokens (KISS). Tune `limit` freely;
+# `period` must be 10 or 60. namespace_id is an arbitrary string-integer, unique per ruleset.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 100
+  period = 60
+
 # Secrets (set with `nubx wrangler secret put <NAME>`), never committed:
 #   OPENAI_API_KEY  ANTHROPIC_API_KEY  GEMINI_API_KEY  ADMIN_SECRET
 # Optional upstream overrides (plain vars, NOT secrets) default to the real hosts:
