@@ -9,7 +9,7 @@ preview_urls = false
 # Dedicated to api-proxy — must NOT be shared with any other worker.
 [[kv_namespaces]]
 binding = "TOKENS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "1b212581e15144fb9f931b221a8cc5cd"
 
 # Region-pinned egress relay (SQLite Durable Object, free plan). OpenAI calls that hit a
 # geo-blocked egress colo are re-issued through this DO via locationHint:"wnam" (North America).
