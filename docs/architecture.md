@@ -21,45 +21,27 @@ token-gated worker.
 
 One worker, dispatched by path (`src/index.ts`):
 
-```
-            ┌──────────────────────── api-proxy worker ────────────────────────┐
-request ──▶ │  /admin/* ──▶ Hono admin sub-app   (wrapped in try/catch → 500)   │
-            │  else      ──▶ handleProxy()        (framework-free hot path)      │
-            └───────────────────────────────────────────────────────────────────┘
-```
-
-The admin sub-app is isolated in a `try/catch` so an admin bug can never crash the proxy branch.
-The proxy hot path imports **no framework** — it is pure functions plus a `fetch` handler
-(`src/proxy.ts` must never import Hono).
+- **`/admin/*`** → the Hono admin sub-app, wrapped in `try/catch` (→ 500) so an admin bug can never
+  crash the proxy branch.
+- **everything else** → `handleProxy`, the framework-free hot path (`src/proxy.ts` must never import
+  Hono — it is pure functions plus a `fetch` handler).
 
 ## 3. Request flow (proxy hot path)
 
-`handleProxy` is a thin wrapper; `proxyRequest` does the work:
+`handleProxy` is a thin wrapper: it answers an `OPTIONS` preflight directly, otherwise runs
+`proxyRequest` and reflects CORS headers onto the result (§8). `proxyRequest`:
 
-```
-handleProxy(req):
-  OPTIONS?  ──▶ corsPreflight() → 204 (no auth, no upstream)         §8
-  else      ──▶ withCors( proxyRequest(req) )                        §8
+1. **Extract** the token from whichever auth slot it arrived in and **route** the provider from that
+   slot (+ path); missing either → **401**. (§4)
+2. **Validate** `SHA-256(token)` against KV — a miss, a disabled token, or an expired one → **401**. (§6)
+3. Requested provider not in the token's scope → **403**. (§4)
+4. **Rate-limit** on the hash — over the cap → **429** + `Retry-After` (fail-open). (§7)
+5. **Rewrite** the URL to the upstream — protocol/host/port only; strip `?key=` for Gemini. (§12)
+6. **Swap auth** — strip every inbound auth header, set the one real key. (§5)
+7. **Fetch** the upstream (OpenAI adds a geo-403 fallback, §9), stream the response back unbuffered,
+   and stamp `lastUsed` fire-and-forget. (§6, §9)
 
-proxyRequest(req):
-  1. token    = extractToken(req)        auth slot → token           §4
-  2. provider = routeProvider(req)       auth slot (+path) → provider §4
-     no token / no provider ───────────────────────────▶ 401
-  3. hash = SHA-256(token)
-  4. meta = getValidatedByHash(hash)     active? not expired?         §6
-     miss / disabled / expired ─────────────────────────▶ 401
-  5. coarse(provider) ∉ meta.providers ──────────────────▶ 403
-  6. RATE_LIMITER.limit({ key: hash })   per-token, fail-open         §7
-     denied ────────────────────────────────────────────▶ 429 + Retry-After
-  7. rewriteToUpstream(url)              protocol/host/port only      §12
-     gemini* → strip ?key=
-  8. swapAuth(headers)                   strip ALL auth, set ONE key  §5
-  9. fetch(upstream)                     (OpenAI: geo-403 fallback)   §9
- 10. ctx.waitUntil(touchLastUsed(hash))  fire-and-forget              §6
- 11. return Response(upstream.body, upstream)   stream straight through
-```
-
-Responses stream through unbuffered, preserving SSE.
+Path and query forward verbatim; only protocol/host/port change.
 
 ## 4. Provider routing (by auth header)
 
@@ -75,9 +57,9 @@ populated** (`routeProvider`, `extractToken`):
 | none | — | 401 |
 
 `gemini-openai` (the OpenAI-compatible Gemini endpoint) collapses to the `gemini` scope via
-`coarse()`; the distinction only selects the auth-swap branch. **Why no `/openai` `/anthropic`
-path prefix:** it would break Gemini's file-upload flow (absolute `x-goog-upload-url` round trip)
-and force every client to rewrite the SDK's own base path. See
+`coarse()`; the distinction only selects the auth-swap branch. **Why no `/openai` `/anthropic` path
+prefix:** it would break Gemini's file-upload flow (absolute `x-goog-upload-url` round trip) and
+force every client to rewrite the SDK's own base path. See
 [`provider-routing-by-auth-header.md`](learnings/provider-routing-by-auth-header.md).
 
 ## 5. Auth swap (security linchpin)
@@ -119,14 +101,13 @@ type TokenMetadata = {
 - **Validation** (`getValidatedByHash`): returns the record only if `status === "active"` AND, when
   `expiresAt` is set, it parses to a future timestamp — malformed or past expiry is rejected
   **fail-closed**. Not KV `expirationTtl` (60s floor, silently deletes the record, orphans the `:lu`
-  key) — see
-  [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
+  key) — see [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
 - **`lastUsed`** lives in a separate `<hash>:lu` key, written fire-and-forget on each proxied
   request. Keeping it out of the token record means stamping it can never resurrect or re-enable a
   token the admin just disabled or deleted.
 - **Lifecycle:** `createToken`, `listTokens` (paginates KV, skips `:lu` keys), `updateToken`
-  (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent
-  (~60s), so revoke and new-token visibility can lag.
+  (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s),
+  so revoke and new-token visibility can lag.
 
 ## 7. Per-token rate limiting
 
@@ -152,8 +133,8 @@ loose ceiling for abuse protection, not a strict quota. Verified to run on the F
 `handleProxy` short-circuits `OPTIONS` to a `204` preflight **before** the token checks (a preflight
 carries no auth header, so it would otherwise 401 and block every browser SDK). The preflight
 reflects the request `Origin`, reflects the requested `Access-Control-Request-Headers`, and sets
-`Access-Control-Max-Age: 86400`. Every real response is then passed through `withCors`, which
-reflects `Origin` and exposes the Gemini resumable-upload headers
+`Access-Control-Max-Age: 86400`. Every real response then passes through `withCors`, which reflects
+`Origin` and exposes the Gemini resumable-upload headers
 (`x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity`). No `Origin` → no CORS
 headers (server-side callers are unaffected). Credentials mode is never enabled (SDKs send keys as
 headers, not cookies). Provider browser opt-ins still apply (e.g. Anthropic's
@@ -168,38 +149,32 @@ key is never on it.
 
 OpenAI 403s `unsupported_country_region_territory` when a request egresses from an unsupported colo
 (e.g. Hong Kong). A Worker's `fetch()` egresses from the colo the invocation runs in, fixed per
-invocation, so an in-invocation retry can't escape a bad colo. Fix: try the fast edge fetch first,
-and **only on the geo-403** re-issue through a SQLite Durable Object (`UsEgress`) pinned to North
-America with `locationHint: "wnam"`; its `fetch()` then egresses from a supported region.
+invocation, so an in-invocation retry can't escape a bad colo.
 
-```
-OpenAI request → direct edge fetch ─ 200 ─▶ return            (fast path, ~60%)
-                       │ geo-403
-                       ▼
-              US-pinned DO (wnam) ─▶ egress US ─▶ OpenAI 200 ─▶ return
-```
-
-Only the OpenAI branch buffers the body (so it can be replayed to the DO); a pool of DO ids spreads
-load. Anthropic and Gemini are untouched, and the real key never leaves Cloudflare. See
-[`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
+The fix is a fallback: try the fast edge `fetch()` first (the ~60% that egress from a good colo
+return immediately); **only on the geo-403**, re-issue the same request through the `UsEgress` SQLite
+Durable Object pinned to North America (`locationHint: "wnam"`). Running in a US colo, its `fetch()`
+egresses from a supported region and succeeds. Only the OpenAI branch buffers the body (to replay it
+to the DO); a pool of DO ids spreads load. Anthropic and Gemini are untouched, and the real key never
+leaves Cloudflare. See [`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
 
 ## 10. Admin dashboard
 
-Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered JSX-ish HTML via `hono/html`
-plus **HTMX 2.x** loaded from a CDN (zero client JS we author; nothing in the worker bundle but
-markup + attributes).
+Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus
+**HTMX 2.x** loaded from a CDN (zero client JS we author; nothing in the worker bundle but markup +
+attributes).
 
 - **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` sets an HMAC-SHA256-signed cookie
   `cm_admin=<ts>.<sig>` (`HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards
-  every `/admin/*` route except login; signature check uses constant-time `crypto.subtle.verify`.
+  every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`.
 - **CRUD:** HTMX-driven over `/admin/api/tokens` — list (`GET`), create (`POST`; parses label,
-  provider checkboxes, optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated
-  token), edit/enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
-- **UI:** add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token
+  provider checkboxes, an optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated
+  token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
+- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token
   table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created
-  plaintext is shown once. Expired tokens render `expired` and dim the row. The token list refreshes
-  on load, on the `tokens-changed` event, and **every 10 s** (a poll to surface new tokens /
-  last-used despite KV's ~60 s list propagation).
+  plaintext is shown once; expired tokens render `expired` and dim the row. The list refreshes on
+  load, on the `tokens-changed` event, and **every 10 s** (to surface new tokens / last-used despite
+  KV's ~60 s list propagation).
 
 ## 11. Real key handling
 
@@ -216,8 +191,8 @@ never returned in a response body. The CORS and rate-limit paths never touch a r
 | `RATE_LIMITER` | Rate Limit | per-token RPM ceiling |
 
 Plus `[[migrations]] tag="v1" new_sqlite_classes=["UsEgress"]`. Upstreams resolve through
-`upstreamBase()`: `*_UPSTREAM` env vars (plain vars, not secrets) default to the real hosts and are
-overridden only by tests pointing at a mock; `rewriteToUpstream` rewrites just protocol/host/port.
+`upstreamBase()`: the `*_UPSTREAM` env vars (plain vars, not secrets) default to the real hosts and
+are overridden only by tests pointing at a mock; `rewriteToUpstream` rewrites just protocol/host/port.
 
 ## 13. Testing (two tiers)
 
@@ -231,15 +206,15 @@ Tier 2 covers all four routing modes — OpenAI (Bearer), Anthropic (`x-api-key`
 for the first three; OpenAI-compat streaming rides the same SSE passthrough, so it has no dedicated
 test. Each asserts the real key reaches the mock and the token never does. Routing is by auth header
 alone, so any standard-auth SDK behaves identically — these four are representative. **No test hits a
-live provider** (mock upstream only): OpenAI/Anthropic are verified live in deployment, but
-**Gemini has never run against the real Google API** (no key yet).
+live provider** (mock upstream only): OpenAI/Anthropic are verified live in deployment, but **Gemini
+has never run against the real Google API** (no key yet).
 
 ## 14. Deployment
 
 ```bash
 nub install
 nubx wrangler kv namespace create api-proxy-tokens   # paste id into wrangler.toml
-nubx wrangler secret put OPENAI_API_KEY           # + ANTHROPIC / GEMINI / ADMIN_SECRET
+nubx wrangler secret put OPENAI_API_KEY              # + ANTHROPIC / GEMINI / ADMIN_SECRET
 nubx wrangler deploy
 ```
 
@@ -260,10 +235,10 @@ Caveats:
 
 ## 16. Deferred / future
 
-The token data model leaves room (`limits`, `spend`) without carrying the weight now:
-spend / token-count caps + per-token usage analytics (needs a metering Durable Object and SSE usage
-parsing), multiple real keys per provider (key pools), concurrency limits and longer rate-limit
-windows, and instant (sub-minute) revocation via a DO allow/deny list.
+The token data model leaves room (`limits`, `spend`) without carrying the weight now: spend /
+token-count caps + per-token usage analytics (needs a metering Durable Object and SSE usage parsing),
+multiple real keys per provider (key pools), concurrency limits and longer rate-limit windows, and
+instant (sub-minute) revocation via a DO allow/deny list.
 
 ## 17. Repository layout
 
