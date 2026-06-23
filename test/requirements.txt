@@ -2,10 +2,10 @@
 # Pinned with ~= to lock the minor version: these libs shift default endpoints / base-URL handling
 # across minors, which is exactly what the compat tests encode. Bump deliberately, then re-run.
 # Setup (uv):  uv venv && uv pip install -r test/requirements.txt
-litellm~=1.83.7
+litellm~=1.89.3
 instructor~=1.15.3
-pydantic~=2.12.5
-openai~=2.30.0
+pydantic~=2.13.4
+openai~=2.43.0
 pydantic-ai-slim[openai]~=1.107.0
 llama-index-core~=0.14.22
 llama-index-llms-openai~=0.7.9
