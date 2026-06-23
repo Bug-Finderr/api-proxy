@@ -54,8 +54,11 @@ Bearer case), `fetch.ts` (the `?key=` query slot **and** verbatim path/query/bod
 
 ## Decision we keep
 
-Test **one representative client per auth slot** (done) and treat everything else as
-compatible-by-construction, documented rather than re-tested. Adding a Vercel AI SDK or per-language
-test would only re-exercise an already-covered slot — redundant by the routing logic above. Add a new
-test only if a future client hits a genuinely new auth slot or routing path, which nothing in the
-current ecosystem does.
+Anchor every provider with **one real-SDK test in at least one language** — `openai.ts` (+
+`litellm.py`), `anthropic-ai-sdk.ts`, `google-genai.ts` (+ `fetch.ts`) — then treat that provider's
+other languages and wrappers as compatible-by-construction, documented rather than re-tested. The
+anchors are load-bearing: by-construction extends a *verified* anchor to clients that share its slot,
+so without an anchor it would prove nothing. Adding a Vercel AI SDK or per-language test would only
+re-exercise an already-anchored slot — redundant by the routing logic above. Add a new test only if a
+future client hits a genuinely new auth slot or routing path, which nothing in the current ecosystem
+does.
