@@ -53,6 +53,9 @@ OpenAI-supported region. It is wired as a **fallback**, not the default path: tr
 first and re-issue through the DO **only on the geo-403** (`src/proxy.ts`). The request body is buffered
 for OpenAI so it can be replayed to the DO.
 
+The egress DO is **pooled across 8 named instances** (`EGRESS_POOL=8`, `idFromName('oa-egress-N')` with a
+random `N`), so all OpenAI traffic isn't funneled through one DO.
+
 ```
 OpenAI request
       │

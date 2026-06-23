@@ -41,8 +41,6 @@ One worker, dispatched by path (`src/index.ts`):
 7. **Fetch** the upstream (OpenAI adds a geo-403 fallback, §9), stream the response back unbuffered,
    and stamp `lastUsed` fire-and-forget. (§6, §9)
 
-Path and query forward verbatim; only protocol/host/port change.
-
 ## 4. Provider routing (by auth header)
 
 The client adds no path prefix and no custom header — routing reads **which auth slot the SDK
@@ -55,6 +53,10 @@ populated** (`routeProvider`, `extractToken`):
 | `Authorization: Bearer` + path `/v1beta/openai/*` | `gemini-openai` | generativelanguage.googleapis.com |
 | `Authorization: Bearer` (else) | `openai` | api.openai.com |
 | none | — | 401 |
+
+Auth slots are checked **before** `?key=`, so a request carrying `Authorization: Bearer` routes to
+openai / gemini-openai even when it also has `?key=`; the `x-goog-api-key or ?key=` equivalence holds
+only when no Bearer header is present.
 
 `gemini-openai` (the OpenAI-compatible Gemini endpoint) collapses to the `gemini` scope via
 `coarse()`; the distinction only selects the auth-swap branch. **Why no `/openai` `/anthropic` path
@@ -119,6 +121,7 @@ or erroring binding must never brick the proxy.
 [[ratelimits]]
 name = "RATE_LIMITER"
 namespace_id = "1001"
+
   [ratelimits.simple]
   limit = 100        # one shared ceiling for all tokens; tune freely
   period = 60        # must be 10 or 60
@@ -132,9 +135,11 @@ loose ceiling for abuse protection, not a strict quota. Verified to run on the F
 
 `handleProxy` short-circuits `OPTIONS` to a `204` preflight **before** the token checks (a preflight
 carries no auth header, so it would otherwise 401 and block every browser SDK). The preflight
-reflects the request `Origin`, reflects the requested `Access-Control-Request-Headers`, and sets
+reflects the request `Origin`, reflects the requested `Access-Control-Request-Headers`, advertises a
+fixed method allow-list (`GET, POST, PUT, DELETE, OPTIONS`), and sets
 `Access-Control-Max-Age: 86400`. Every real response then passes through `withCors`, which reflects
-`Origin` and exposes the Gemini resumable-upload headers
+`Origin`, appends `Vary: Origin` (so per-Origin reflection is cache-safe), and exposes the Gemini
+resumable-upload headers
 (`x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity`). No `Origin` → no CORS
 headers (server-side callers are unaffected). Credentials mode is never enabled (SDKs send keys as
 headers, not cookies). Provider browser opt-ins still apply (e.g. Anthropic's
@@ -151,7 +156,7 @@ OpenAI 403s `unsupported_country_region_territory` when a request egresses from 
 (e.g. Hong Kong). A Worker's `fetch()` egresses from the colo the invocation runs in, fixed per
 invocation, so an in-invocation retry can't escape a bad colo.
 
-The fix is a fallback: try the fast edge `fetch()` first (the ~60% that egress from a good colo
+The fix is a fallback: try the fast edge `fetch()` first (requests that egress from a good colo
 return immediately); **only on the geo-403**, re-issue the same request through the `UsEgress` SQLite
 Durable Object pinned to North America (`locationHint: "wnam"`). Running in a US colo, its `fetch()`
 egresses from a supported region and succeeds. Only the OpenAI branch buffers the body (to replay it
@@ -165,7 +170,7 @@ Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `
 attributes).
 
 - **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` sets an HMAC-SHA256-signed cookie
-  `cm_admin=<ts>.<sig>` (`HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards
+  `cm_admin=<ts>.<sig>` (`Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards
   every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`.
 - **CRUD:** HTMX-driven over `/admin/api/tokens` — list (`GET`), create (`POST`; parses label,
   provider checkboxes, an optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated
@@ -222,9 +227,8 @@ Free Workers plan covers it (100k req/day); you only pay upstream providers for 
 
 ## 15. Security model
 
-Invariants, detailed above: real keys are secrets injected only outbound (§11); tokens stored as
-`SHA-256` (§6); strip-all-then-set-one auth swap (§5); revoke-safe `lastUsed` (§6); admin behind a
-constant-time HMAC cookie, isolated from the proxy branch (§10).
+Invariants are detailed in §5 (auth swap), §6 (token hashing, revoke-safe `lastUsed`), §10 (admin
+HMAC cookie), and §11 (real-key handling).
 
 Caveats:
 

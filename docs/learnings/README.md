@@ -13,3 +13,4 @@ Each file: the problem, what we found, and the decision we keep.
 - [proxy-token-security.md](proxy-token-security.md) - how a shareable token rides the SDK's auth slot without ever leaking the real key
 - [token-expiry-check-at-validate.md](token-expiry-check-at-validate.md) - why expiry is checked at read time, not via KV TTL, and fail-closed on bad input
 - [rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md) - the Workers Rate Limiting binding is free on the Free plan but a loose, per-colo ceiling
+- [cors-preflight-and-upload-passthrough.md](cors-preflight-and-upload-passthrough.md) - why the browser preflight is answered before auth, and why the Gemini upload URL is passed through untouched
