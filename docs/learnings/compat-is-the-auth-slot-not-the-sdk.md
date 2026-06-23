@@ -33,10 +33,9 @@ Every client also exposes a first-class base-URL override (`base_url` / `baseURL
 `OPENAI_BASE_URL` / `httpOptions.baseUrl` / `createX({ baseURL })` / `configuration.baseURL` / ...), so
 all can be aimed at the worker.
 
-The existing tier-2 tests cover all four slots the proxy reads — the three header slots in the table
-plus the `?key=` query param (which no SDK uses, only raw HTTP): `openai.ts` + `litellm.py` (Bearer),
-`anthropic-ai-sdk.ts` (x-api-key), `google-genai.ts` (x-goog-api-key **and** the `/v1beta/openai/`
-Bearer case), `fetch.ts` (the `?key=` query slot **and** verbatim path/query/body forwarding).
+All four slots the proxy reads are exercised end-to-end — the three header slots in the table plus
+the `?key=` query param (which no SDK uses, only raw HTTP via `fetch.ts`). The full list of tested
+libraries is in "What we test" below.
 
 ## Caveats worth knowing (real divergences, not new slots)
 
@@ -52,13 +51,35 @@ Bearer case), `fetch.ts` (the `?key=` query slot **and** verbatim path/query/bod
   `/v1` in the base URL; the official `@anthropic-ai/sdk` does **not** (it appends `/v1/messages`
   itself). Set each client's base URL the way that client documents it.
 
-## Decision we keep
+## What we test, and what we document
 
-Anchor every provider with **one real-SDK test in at least one language** — `openai.ts` (+
-`litellm.py`), `anthropic-ai-sdk.ts`, `google-genai.ts` (+ `fetch.ts`) — then treat that provider's
-other languages and wrappers as compatible-by-construction, documented rather than re-tested. The
-anchors are load-bearing: by-construction extends a *verified* anchor to clients that share its slot,
-so without an anchor it would prove nothing. Adding a Vercel AI SDK or per-language test would only
-re-exercise an already-anchored slot — redundant by the routing logic above. Add a new test only if a
-future client hits a genuinely new auth slot or routing path, which nothing in the current ecosystem
-does.
+Compatibility is the slot, not the language — but a *library* is its own client with its own wiring
+(base-URL option, default endpoint, extra headers), so each distinct library gets one end-to-end test
+as a living usage example. We do **not** re-test the same library in every language: a provider's
+packages share one auth slot (the matrix above), so one language proves them all.
+
+**Tested end-to-end** (`test/sdk-compat/`, each file named after its package):
+
+- Node (`nub run test:compat`): the official `openai`, `@anthropic-ai/sdk`, `@google/genai`; the
+  Vercel AI SDK (`@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`); LangChain
+  (`@langchain/openai`, `@langchain/anthropic`, `@langchain/google-genai`); Genkit
+  (`@genkit-ai/google-genai`); raw `fetch`.
+- Python (`nub run test:py`): LiteLLM, LlamaIndex (openai + anthropic + google-genai), instructor,
+  Pydantic AI.
+
+**Documented as compatible-by-construction** (not separately tested) — each collapses onto a slot
+already proven above:
+
+- **Other-language packages of a tested SDK** — `openai-python` / `-go` / `-java` / `-ruby` /
+  `-dotnet`, `anthropic` (py/go/java/ruby), `google-genai` (py). Same package family, same slot as the
+  JS package already tested; re-testing each language is the redundancy we skip.
+- **End-user apps, not importable libraries** — Aider, Cline, Continue, Open WebUI. Each speaks the
+  OpenAI-compatible surface (Bearer slot) with a user-set base URL.
+- **JVM / .NET frameworks** — Spring AI, Semantic Kernel. Same slots; no JVM/.NET toolchain in this
+  repo to drive them.
+- **Mastra** — `@mastra/core` 1.x is flagged by security advisory MAL-2026-6011 (embedded malicious
+  code), so it is deliberately **not** pulled into the toolchain. It builds on the Vercel AI SDK, so
+  by construction it uses the same Bearer slot already covered by `@ai-sdk/openai`.
+
+A new test is warranted only if a future client hits a genuinely new auth slot or routing path —
+which nothing in the current ecosystem does.

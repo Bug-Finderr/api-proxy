@@ -1,3 +1,12 @@
 # Python deps for the separate-runner compat tests in test/sdk-compat/*.py. Not part of the Node toolchain.
 # Setup:  python -m venv .venv && .venv/Scripts/python -m pip install -r test/requirements.txt
 litellm
+instructor
+pydantic
+openai
+pydantic-ai-slim[openai]
+llama-index-core
+llama-index-llms-openai
+llama-index-llms-openai-like
+llama-index-llms-anthropic
+llama-index-llms-google-genai
