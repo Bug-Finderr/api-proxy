@@ -7,7 +7,7 @@ the real key swapped in and the proxy token nowhere.
 
 One-time setup (from the repo root):
     python -m venv .venv
-    .venv/Scripts/python -m pip install -r test/sdk-compat/requirements.txt   # *nix: .venv/bin/python
+    .venv/Scripts/python -m pip install -r test/requirements.txt   # *nix: .venv/bin/python
 Run it (also runs as part of `nub run test`):
     nub run test:py
 """

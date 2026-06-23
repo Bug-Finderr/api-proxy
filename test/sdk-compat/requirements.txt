@@ -1,3 +1,0 @@
-# Python deps for the separate-runner compat tests (litellm.test.py). Not part of the Node toolchain.
-# Setup:  python -m venv .venv && .venv/Scripts/python -m pip install -r test/sdk-compat/requirements.txt
-litellm
