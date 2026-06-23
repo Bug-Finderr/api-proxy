@@ -41,7 +41,8 @@ function providerFromPath(path) {
   if (path.includes("/v1beta/openai/")) return "openai";
   if (
     path.includes(":generateContent") ||
-    path.includes(":streamGenerateContent")
+    path.includes(":streamGenerateContent") ||
+    path.startsWith("/v1beta/")
   )
     return "gemini";
   if (path.includes("/v1/messages")) return "anthropic";
@@ -226,6 +227,16 @@ try {
     PROXY_FAKE_ANTHROPIC: FAKE.anthropic,
     PROXY_FAKE_GEMINI: FAKE.gemini,
   };
+  // The seeded proxy token is the ONLY key a client should use; strip any real provider key from
+  // the child env so a client that reads a key from the environment can't bypass the token path.
+  for (const k of [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+  ])
+    delete env[k];
   for (const file of pyFiles) {
     captured = null;
     console.log(`[py] ${file}`);
