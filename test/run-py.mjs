@@ -14,8 +14,7 @@ const dir = join(repo, "test", "sdk-compat");
 
 if (!existsSync(py)) {
   console.log(
-    "[py] .venv not found - skipping. Setup: python -m venv .venv && " +
-      ".venv/Scripts/python -m pip install -r test/requirements.txt",
+    "[py] .venv not found - skipping. Setup: uv venv && uv pip install -r test/requirements.txt",
   );
   process.exit(0);
 }

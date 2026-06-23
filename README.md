@@ -85,11 +85,11 @@ Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `n
 
 **What's tested, and what's by-construction.** The worker routes by *which auth slot a request uses*, not by SDK — so a provider's packages behave identically once the slot is fixed. We therefore test **each distinct library once, in one language** — the official `openai` / `@anthropic-ai/sdk` / `@google/genai` SDKs, the Vercel AI SDK, LangChain, Genkit, LiteLLM, LlamaIndex, instructor, and Pydantic AI (see `test/sdk-compat/`) — and treat the rest as compatible-by-construction: a tested SDK's other-language packages (`openai-python`/`-go`/`-java`/...), end-user apps (Aider, Cline, Continue, Open WebUI), and JVM/.NET frameworks (Spring AI, Semantic Kernel) each reuse a slot already proven. The per-provider proof matrix is in [docs/learnings/compat-is-the-auth-slot-not-the-sdk.md](docs/learnings/compat-is-the-auth-slot-not-the-sdk.md). Two gotchas: use Anthropic's normal API-key mode (its OAuth `authToken` mode sends `Bearer`, which would route to OpenAI), and the legacy `google-generativeai` Python SDK needs `transport="rest"` (it defaults to gRPC and won't traverse an HTTP proxy otherwise).
 
-The Python runner uses a local venv (one-time setup):
+The Python runner uses a local venv. One-time setup with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -r test/requirements.txt   # *nix: .venv/bin/python
+uv venv
+uv pip install -r test/requirements.txt
 ```
 
 > **Gemini is untested with the actual API.** No test hits a live provider — all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet, so the Gemini route has never run against the real Google Generative Language API. Treat it as built-but-unproven until a key is added.
