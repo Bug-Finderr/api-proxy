@@ -206,13 +206,18 @@ are overridden only by tests pointing at a mock; `rewriteToUpstream` rewrites ju
 | 1 — proxy logic | `@cloudflare/vitest-pool-workers` (workerd) | routing, auth swap, expiry, CORS, rate limit, geo-403 fallback, SSE passthrough; mocks `fetch`, seeds KV directly |
 | 2 — real SDKs | `unstable_dev` worker + `node:http` mock upstream | the official `openai`, `@anthropic-ai/sdk`, `@google/genai` SDKs end-to-end |
 
-Tier 2 covers all four routing modes — OpenAI (Bearer), Anthropic (`x-api-key`), Gemini native
-(`x-goog-api-key`), and Gemini OpenAI-compat (the OpenAI SDK at `/v1beta/openai`) — plus streaming
-for the first three; OpenAI-compat streaming rides the same SSE passthrough, so it has no dedicated
-test. Each asserts the real key reaches the mock and the token never does. Routing is by auth header
-alone, so any standard-auth SDK behaves identically — these four are representative. **No test hits a
-live provider** (mock upstream only): OpenAI/Anthropic are verified live in deployment, but **Gemini
-has never run against the real Google API** (no key yet).
+Tier 2 covers every auth slot — OpenAI (`Bearer`, `openai.ts` + `litellm.py`), Anthropic
+(`x-api-key`, `anthropic-ai-sdk.ts`), Gemini native (`x-goog-api-key`, `google-genai.ts`), Gemini
+OpenAI-compat (the OpenAI SDK at `/v1beta/openai`, `google-genai.ts`), and the Gemini `?key=` query
+slot plus verbatim path/query/body forwarding (`fetch.ts`) — plus streaming for the main three;
+OpenAI-compat streaming rides the same SSE passthrough, so it has no dedicated test. Each asserts the
+real key reaches the mock and the token never does. Compatibility is fixed by the **auth slot, not the
+SDK or language**: a source-level survey of the official SDKs (6 languages), the Vercel AI SDK,
+LangChain (JS+Py), LiteLLM, LlamaIndex, and the agent tools confirms every client collapses onto one
+of these slots, so a per-SDK test would be redundant — see
+[`compat-is-the-auth-slot-not-the-sdk.md`](learnings/compat-is-the-auth-slot-not-the-sdk.md). **No
+test hits a live provider** (mock upstream only): OpenAI/Anthropic are verified live in deployment, but
+**Gemini has never run against the real Google API** (no key yet).
 
 ## 14. Deployment
 
