@@ -74,15 +74,23 @@ Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: 
 
 ## Testing
 
-Two tiers (Vitest):
-
 ```bash
 nub run test:unit     # tier 1: proxy logic in workerd (vitest-pool-workers), fast CI gate
-nub run test:compat   # tier 2: real openai / @anthropic-ai/sdk / @google/genai SDKs vs a local worker + mock upstream
-nub run test          # both
+nub run test:compat   # tier 2: real SDKs (openai, @anthropic-ai/sdk, @google/genai) + raw fetch vs a mock upstream
+nub run test:py       # tier 2 (Python): LiteLLM through the worker (needs the venv below)
+nub run test          # all of the above
 ```
 
-Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, then drives each real SDK and asserts the forwarded request carries the real key (and never the token).
+Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, drives each real client, and asserts the forwarded request carries the real key (and never the token). **Each file in `test/sdk-compat/` is named after the client it drives and doubles as a usage example** — copy the `baseURL` + key wiring from `openai.ts`, `anthropic.ts`, `gemini.ts` (incl. the Gemini-OpenAI-compat block), `fetch.ts` (raw HTTP, incl. Gemini `?key=`), or `litellm.py`.
+
+Wrapper libraries (Vercel AI SDK, LangChain, LlamaIndex, instructor, ...) need no separate test: each sends one of the same four auth slots to the same base URL, so it routes identically to the official SDK it wraps — point its `baseURL`/`apiKey` at the worker and it works.
+
+The Python runner uses a local venv (one-time setup):
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -r test/sdk-compat/requirements.txt   # *nix: .venv/bin/python
+```
 
 > **Gemini is untested with the actual API.** No test hits a live provider — all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet, so the Gemini route has never run against the real Google Generative Language API. Treat it as built-but-unproven until a key is added.
 

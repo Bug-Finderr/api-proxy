@@ -7,7 +7,8 @@
     "dev": "wrangler dev",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:compat": "vitest run --config vitest.compat.config.ts",
-    "test": "nub run test:unit && nub run test:compat",
+    "test:py": "node test/run-py.mjs",
+    "test": "nub run test:unit && nub run test:compat && nub run test:py",
     "lint": "tsc --noEmit && biome check --write --unsafe .",
     "prepare": "lefthook install"
   },
