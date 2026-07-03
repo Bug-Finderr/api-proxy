@@ -85,7 +85,7 @@ function errorResponse(status: number, error: string): Response {
 const EGRESS_POOL = 8;
 
 /** OpenAI 403s requests that egress from an unsupported region (e.g. the Hong Kong colo). */
-async function isGeoBlock(res: Response): Promise<boolean> {
+export async function isGeoBlock(res: Response): Promise<boolean> {
   if (res.status !== 403) return false;
   try {
     return (await res.clone().text()).includes(
@@ -97,7 +97,7 @@ async function isGeoBlock(res: Response): Promise<boolean> {
 }
 
 /** A North-America-pinned egress stub, so its fetch() leaves from an OpenAI-supported region. */
-function egressStub(env: Env): DurableObjectStub {
+export function egressStub(env: Env): DurableObjectStub {
   const id = env.US_EGRESS.idFromName(
     `oa-egress-${Math.floor(Math.random() * EGRESS_POOL)}`,
   );

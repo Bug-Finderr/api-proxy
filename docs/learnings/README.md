@@ -15,3 +15,4 @@ Each file: the problem, what we found, and the decision we keep.
 - [rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md) - the Workers Rate Limiting binding is free on the Free plan but a loose, per-colo ceiling
 - [cors-preflight-and-upload-passthrough.md](cors-preflight-and-upload-passthrough.md) - why the browser preflight is answered before auth, and why the Gemini upload URL is passed through untouched
 - [compat-is-the-auth-slot-not-the-sdk.md](compat-is-the-auth-slot-not-the-sdk.md) - why one test per auth slot proves every SDK/language/wrapper, so we don't add per-client tests
+- [websocket-proxy-auth-slots.md](websocket-proxy-auth-slots.md) - proxying wss (OpenAI Realtime/Responses, Gemini Live), and why a browser smuggles the key in a subprotocol the worker must rewrite

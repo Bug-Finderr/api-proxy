@@ -1,6 +1,6 @@
 # api-proxy
 
-A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs behind **revocable proxy tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
+A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Google Gemini APIs — over **HTTP and WebSocket** — behind **revocable proxy tokens**. You issue tokens from an admin dashboard and hand them out; each token is validated server-side and swapped for the real provider key before the request is forwarded. Consumers never see your real keys, and you can scope or revoke any token at any time.
 
 ## Use it
 
@@ -30,6 +30,19 @@ curl https://<worker>/v1/chat/completions \
 ```
 
 Browser apps work too — the worker answers the CORS preflight and reflects the request Origin (provider browser opt-ins still apply, e.g. Anthropic's `dangerouslyAllowBrowser`).
+
+### WebSocket / realtime
+
+Realtime sockets proxy the same way — point the WebSocket at the worker and use a proxy token. The worker swaps the token for the real key on the upgrade handshake.
+
+| WebSocket API | URL | token slot |
+|---|---|---|
+| OpenAI Realtime (server) | `wss://<worker>/v1/realtime?model=…` | `Authorization: Bearer <proxy-token>` |
+| OpenAI Realtime (browser) | `wss://<worker>/v1/realtime?model=…` | `Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.<proxy-token>` |
+| OpenAI Responses (WebSocket mode) | `wss://<worker>/v1/responses` | `Authorization: Bearer <proxy-token>` |
+| Gemini Live | `wss://<worker>/ws/…BidiGenerateContent?key=<proxy-token>` | `?key=` query |
+
+A browser can't set the `Authorization` header on a WebSocket, so OpenAI smuggles the key in the `openai-insecure-api-key.` subprotocol — the worker reads it there and re-presents it as a Bearer header upstream. Anthropic has no WebSocket API. A long-lived socket is rate-limited and validated **once at connect**, so a revoke applies to the next connection, not an open stream.
 
 ## How it works
 
@@ -76,12 +89,12 @@ Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: 
 
 ```bash
 nub run test:unit     # tier 1: proxy logic in workerd (vitest-pool-workers), fast CI gate
-nub run test:compat   # tier 2: real client libs (official SDKs, Vercel AI SDK, LangChain, Genkit) + raw fetch vs a mock upstream
+nub run test:compat   # tier 2: real client libs (official SDKs, Vercel AI SDK, LangChain, Genkit) + raw fetch + a real wss round-trip vs a mock upstream
 nub run test:py       # tier 2 (Python): LiteLLM, LlamaIndex, instructor, Pydantic AI through the worker (needs the venv below)
 nub run test          # all of the above
 ```
 
-Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, drives each real client, and asserts the forwarded request carries the real key (and never the token). The Python runner (`test/run-py.mjs`) owns the same worker + mock and runs each `*.py` as a thin client. **Each file in `test/sdk-compat/` is named after the package it drives and doubles as a usage example** — copy the `baseURL`/`apiKey` wiring from the file matching your client (e.g. `ai-sdk-openai.ts`, `langchain-anthropic.ts`, `genkit.ts`, `pydantic-ai.py`), or from `fetch.ts` for raw HTTP.
+Tier 2 starts the real worker (`unstable_dev`) with `*_UPSTREAM` pointed at a `node:http` mock, seeds a token via the admin API, drives each real client, and asserts the forwarded request carries the real key (and never the token). The Python runner (`test/run-py.mjs`) owns the same worker + mock and runs each `*.py` as a thin client. **Each file in `test/sdk-compat/` is named after the package it drives and doubles as a usage example** — copy the `baseURL`/`apiKey` wiring from the file matching your client (e.g. `ai-sdk-openai.ts`, `langchain-anthropic.ts`, `genkit.ts`, `pydantic-ai.py`), from `fetch.ts` for raw HTTP, or from `websocket.ts` for a wss client.
 
 **What's tested, and what's by-construction.** The worker routes by *which auth slot a request uses*, not by SDK — so a provider's packages behave identically once the slot is fixed. We therefore test **each distinct library once, in one language** — the official `openai` / `@anthropic-ai/sdk` / `@google/genai` SDKs, the Vercel AI SDK, LangChain, Genkit, LiteLLM, LlamaIndex, instructor, and Pydantic AI (see `test/sdk-compat/`) — and treat the rest as compatible-by-construction: a tested SDK's other-language packages (`openai-python`/`-go`/`-java`/...), end-user apps (Aider, Cline, Continue, Open WebUI), and JVM/.NET frameworks (Spring AI, Semantic Kernel) each reuse a slot already proven. The per-provider proof matrix is in [docs/learnings/compat-is-the-auth-slot-not-the-sdk.md](docs/learnings/compat-is-the-auth-slot-not-the-sdk.md). Two gotchas: use Anthropic's normal API-key mode (its OAuth `authToken` mode sends `Bearer`, which would route to OpenAI), and the legacy `google-generativeai` Python SDK needs `transport="rest"` (it defaults to gRPC and won't traverse an HTTP proxy otherwise).
 

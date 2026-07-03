@@ -52,7 +52,7 @@ def main():
     # 2) Anthropic -> x-api-key -> /v1/messages  (base_url is the bare host)
     reset()
     Anthropic(
-        base_url=W, api_key=TOKEN, model="claude-3-5-sonnet-20241022", max_tokens=16
+        base_url=W, api_key=TOKEN, model="claude-sonnet-4-6", max_tokens=16
     ).chat(msg())
     cap = captured()
     assert cap["path"] == "/v1/messages", cap["path"]

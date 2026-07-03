@@ -13,24 +13,26 @@
     "prepare": "lefthook install"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^3.0.85",
-    "@ai-sdk/google": "^3.0.83",
-    "@ai-sdk/openai": "^3.0.74",
-    "@anthropic-ai/sdk": "^0.105.0",
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/google": "^4.0.1",
+    "@ai-sdk/openai": "^4.0.1",
+    "@anthropic-ai/sdk": "^0.106.0",
     "@biomejs/biome": "^2.5.1",
-    "@cloudflare/vitest-pool-workers": "^0.16.18",
-    "@cloudflare/workers-types": "^4.20260623.1",
-    "@genkit-ai/google-genai": "^1.37.0",
-    "@google/genai": "^2.9.0",
+    "@cloudflare/vitest-pool-workers": "^0.16.20",
+    "@cloudflare/workers-types": "^4.20260627.1",
+    "@genkit-ai/google-genai": "^1.39.0",
+    "@google/genai": "^2.10.0",
     "@langchain/anthropic": "^1.5.1",
     "@langchain/core": "^1.2.1",
     "@langchain/google-genai": "^2.2.0",
-    "@langchain/openai": "^1.5.2",
-    "ai": "^6.0.208",
-    "genkit": "^1.37.0",
+    "@langchain/openai": "^1.5.3",
+    "@types/ws": "^8.18.1",
+    "ai": "^7.0.3",
+    "genkit": "^1.39.0",
     "lefthook": "^2.1.9",
-    "openai": "^6.44.0",
+    "openai": "^6.45.0",
     "vitest": "^4.1.9",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
@@ -38,6 +40,6 @@
   },
   "dependencies": {
     "hono": "^4.12.27",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.105.0"
   }
 }
