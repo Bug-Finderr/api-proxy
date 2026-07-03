@@ -2,9 +2,7 @@
 
 A running log of project-specific knowledge worth not rediscovering. One topic per file, kept short.
 
-Write a file for anything **non-general**: a gotcha, a constraint, a decision and its why, a platform or
-API quirk we hit. The bar is "non-obvious and specific to this project," not "it changed the product
-direction." Skip general/common knowledge anyone would already have. Don't rewrite history; append.
+Write a file for anything **non-general**: a gotcha, a constraint, a decision and its why, a platform or API quirk we hit. The bar is "non-obvious and specific to this project," not "it changed the product direction." Skip general/common knowledge anyone would already have. Don't rewrite history; append.
 
 Each file: the problem, what we found, and the decision we keep.
 
