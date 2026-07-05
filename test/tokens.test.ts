@@ -119,6 +119,20 @@ describe("touchLastUsed", () => {
     expect(row?.label).toBe("tu");
   });
 
+  it("writes at most once per UTC day per token", async () => {
+    const { hash } = await createToken(env.TOKENS, {
+      label: "throttle",
+      providers: ["openai"],
+      token: "throttle-t",
+    });
+    await touchLastUsed(env.TOKENS, hash);
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
+    // a same-day re-touch must not rewrite the deleted stamp
+    await env.TOKENS.delete(`${hash}:lu`);
+    await touchLastUsed(env.TOKENS, hash);
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeNull();
+  });
+
   it("does not resurrect a disabled token when lastUsed is stamped", async () => {
     const { token, hash } = await createToken(env.TOKENS, {
       label: "rev",

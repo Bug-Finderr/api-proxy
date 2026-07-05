@@ -1,5 +1,4 @@
-// KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown
-// once at creation and never persisted.
+// KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown once at creation and never persisted.
 import type { CoarseProvider, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
@@ -127,10 +126,17 @@ export async function deleteToken(
   await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
 }
 
+// One stamp per UTC day per isolate: the dashboard shows only the date, and the free tier allows 1,000 KV writes/day account-wide.
+const luStampedDay = new Map<string, string>();
+
 export async function touchLastUsed(
   kv: KVNamespace,
   hash: string,
 ): Promise<void> {
+  const now = new Date().toISOString();
+  const day = now.slice(0, 10);
+  if (luStampedDay.get(hash) === day) return;
+  luStampedDay.set(hash, day);
   // Write only the side key; never touch the token record (avoids resurrecting a revoke).
-  await kv.put(luKey(hash), new Date().toISOString());
+  await kv.put(luKey(hash), now);
 }

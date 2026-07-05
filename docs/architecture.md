@@ -78,7 +78,7 @@ type TokenMetadata = {
 
 - **Tokens** are opaque: `ptk_` + 32 url-safe chars (24 random bytes). Custom admin-typed tokens are allowed; validation is by hash of the full string.
 - **Validation** (`getValidatedByHash`): returns the record only if `status === "active"` AND, when `expiresAt` is set, it parses to a future timestamp — malformed or past expiry is rejected **fail-closed**. Not KV `expirationTtl` (60s floor, silently deletes the record, orphans the `:lu` key) — see [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
-- **`lastUsed`** lives in a separate `<hash>:lu` key, written fire-and-forget on each proxied request. Keeping it out of the token record means stamping it can never resurrect or re-enable a token the admin just disabled or deleted.
+- **`lastUsed`** lives in a separate `<hash>:lu` key, stamped fire-and-forget at most once per UTC day per token (date-only column; free-tier KV allows 1,000 writes/day account-wide). Keeping it out of the token record means stamping it can never resurrect or re-enable a token the admin just disabled or deleted.
 - **Lifecycle:** `createToken`, `listTokens` (paginates KV, skips `:lu` keys), `updateToken` (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s), so revoke and new-token visibility can lag.
 
 ## 7. Per-token rate limiting
