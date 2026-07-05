@@ -1,6 +1,6 @@
 # Free-tier KV: writes are the budget, and the quota is account-wide
 
-## What happened
+## Problem
 
 Every proxied request (and every WS upgrade) stamped `lastUsed` with one KV write. One day (~500 requests) tripped Cloudflare's "50% of your daily Workers KV limit" warning email - half the day's write quota spent on a column that only shows a date.
 
@@ -14,7 +14,7 @@ Every proxied request (and every WS upgrade) stamped `lastUsed` with one KV writ
 
 ## The decision we keep
 
-`touchLastUsed` stamps **at most once per UTC day per token**: a module-scope day-memo checked synchronously before the first `await` (atomic on the single-threaded isolate), keyed only by validated hashes so it can't grow unbounded. It lives in `tokens.ts` so both call sites are covered - the HTTP hot path and the per-connection WS path, where a flapping realtime client reconnecting every second would otherwise burn ~86k writes/day on its own. The dashboard shows only the date, so nothing visible is lost.
+`touchLastUsed` stamps **at most once per UTC day per token per isolate**: a module-scope day-memo checked synchronously before the first `await` (atomic on the single-threaded isolate), keyed only by validated hashes so it can't grow unbounded. It lives in `tokens.ts` so both call sites are covered - the HTTP hot path and the per-connection WS path, where a flapping realtime client reconnecting every second would otherwise burn ~86k writes/day on its own. The dashboard shows only the date, so nothing visible is lost.
 
 Accepted trades: a failed put releases the day-claim so the next request retries (on a quota-exhausted day that is one doomed, quota-free retry per request inside `waitUntil` - invisible to clients), and isolate churn re-stamps at worst a handful of times per token per day. Reads stay unmemoized - 100x headroom, and a memo would delay revocation for no binding win.
 

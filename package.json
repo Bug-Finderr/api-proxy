@@ -3,6 +3,7 @@
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "wrangler dev",
     "test:unit": "vitest run --config vitest.config.ts",

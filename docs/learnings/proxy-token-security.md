@@ -1,38 +1,20 @@
 # Proxy token security
 
-## Idea
+## Problem
 
-A proxy token is a shareable, revocable stand-in for a real provider key. The holder puts it in the normal SDK auth slot; the proxy validates it, then swaps in the real key. You can hand someone access without exposing your OpenAI/Anthropic/Gemini key, and revoke it any time.
+Share provider access without exposing the real key, revocably, with unmodified SDKs - and no leak in any direction, however oddly a client uses the token.
 
-## Request flow
+## What we found
 
-```mermaid
-sequenceDiagram
-    participant C as client SDK
-    participant W as Worker
-    participant U as api.provider.com
-    C->>W: proxy token in the SDK's auth slot
-    W->>W: look up SHA-256(token) in KV
-    alt not found / disabled
-        W-->>C: 401
-    else provider not in token scope
-        W-->>C: 403
-    else valid
-        W->>W: strip ALL auth headers, set ONE real key
-        W->>U: forward (token never sent on)
-    end
-```
+- **Clients put credentials in unexpected slots** (e.g. `Authorization` *and* `?key=`). Forwarding headers as-received leaks the token upstream in the un-routed slot; deleting only the matched slot is not enough.
+- **Plaintext in KV is an exfiltration surface** - the dashboard, `wrangler kv`, or a rendering bug could expose live credentials.
+- **Stamping usage into the token record races revocation** - a hot-path `put` of the record can resurrect a token the admin just revoked.
 
-## The decisions that keep it safe
+## The decision we keep
 
-- **Token rides the SDK's auth slot.** No custom header, no path change. The client only swaps base URL and key. The proxy reads the token from whichever slot routing matched (see [provider-routing-by-auth-header.md](provider-routing-by-auth-header.md)).
+- **The token rides the SDK's own auth slot** - the client swaps only base URL and key ([provider-routing-by-auth-header.md](provider-routing-by-auth-header.md)).
+- **Strip-all-then-set-one** (`swapAuth`): delete every inbound auth slot (on wss also the subprotocol and `?key=`), set exactly one real key.
+- **Hashed at rest**, plaintext shown once - KV never holds a usable credential.
+- **`lastUsed` in a side key** (`<hash>:lu`), never the record - the hot path physically cannot re-enable a revoked token.
 
-- **Strip-all-then-set-one.** Before forwarding, delete *every* inbound auth header (`authorization`, `x-api-key`, `x-goog-api-key`) and set exactly one with the real key (`src/proxy.ts` `swapAuth`). This guarantees the proxy token is never forwarded upstream, even if a client sends it in an unexpected slot. A test asserts the token never appears in any outbound auth header.
-
-- **Hashed at rest.** Tokens are stored as `SHA-256(token)` and shown to the admin exactly once at creation. The KV value never contains the plaintext.
-
-- **Revoke-safe `lastUsed`.** Usage timestamps live in a separate `<hash>:lu` key, not in the token record. Stamping "last used" on a hot path can therefore never recreate or re-enable a record that was deleted or disabled - a revoked token stays revoked.
-
-## Per-token scope
-
-Label, provider scope, enable/disable, revoke, last-used, plus (since v2.1) expiry ([token-expiry-check-at-validate.md](token-expiry-check-at-validate.md)) and rate limiting ([rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md)). Spend caps and per-token analytics stay deliberately deferred - the data model leaves room without carrying the weight now.
+Related: [websocket-proxy-auth-slots.md](websocket-proxy-auth-slots.md) (wider wss slot set), [kv-free-tier-write-quota.md](kv-free-tier-write-quota.md) (why the stamp is throttled).
