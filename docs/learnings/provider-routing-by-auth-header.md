@@ -17,16 +17,19 @@ Each SDK already announces its provider by *which auth slot it populates*:
 
 So routing reads the auth slot, not a path prefix (`src/proxy.ts` `routeProvider`):
 
-```
-inbound request
-   │
-   ├─ has x-api-key?            ──▶ Anthropic
-   ├─ has x-goog-api-key?       ──▶ Gemini
-   ├─ has Authorization: Bearer?
-   │     ├─ path /v1beta/openai/* ──▶ Gemini (OpenAI-compat)
-   │     └─ else                    ──▶ OpenAI
-   ├─ has ?key= ?               ──▶ Gemini
-   └─ none                      ──▶ 401
+```mermaid
+flowchart TD
+    R[inbound request] --> A{"x-api-key?"}
+    A -- yes --> ANT[Anthropic]
+    A -- no --> B{"x-goog-api-key?"}
+    B -- yes --> GEM[Gemini]
+    B -- no --> C{"Authorization: Bearer?"}
+    C -- yes --> P{"path starts /v1beta/openai/?"}
+    P -- yes --> GO["Gemini (OpenAI-compat)"]
+    P -- no --> OAI[OpenAI]
+    C -- no --> D{"?key= query param?"}
+    D -- yes --> GEM
+    D -- no --> E[401]
 ```
 
 ## Why not a path prefix (e.g. `/openai/...`)

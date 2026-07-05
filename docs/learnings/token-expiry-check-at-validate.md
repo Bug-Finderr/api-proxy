@@ -22,4 +22,4 @@ if (meta.expiresAt) {
 
 **Fail-closed on malformed input:** `NaN <= Date.now()` is `false`, which fails *open* (a garbage `expiresAt` stays valid) - so `Number.isNaN(t)` is checked explicitly. The admin form converts its local `datetime-local` value to UTC ISO and rejects unparseable input at creation. Instant cutoff for a leak is still provider-key rotation, not expiry (KV revoke lags ~60s).
 
-Related: [[proxy-token-security]].
+Related: [proxy-token-security.md](proxy-token-security.md).

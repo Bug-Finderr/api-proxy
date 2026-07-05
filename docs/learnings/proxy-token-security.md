@@ -6,17 +6,21 @@ A proxy token is a shareable, revocable stand-in for a real provider key. The ho
 
 ## Request flow
 
-```
-client SDK                      Worker                                upstream
-──────────                      ──────                                ────────
-auth slot = <token>  ──▶  extract token from auth slot
-                          look up SHA-256(token) in KV
-                          ├─ not found / disabled ──▶ 401
-                          ├─ provider not in scope ──▶ 403
-                          └─ ok:
-                             strip ALL auth headers
-                             set ONE real key  ──────────────────▶  api.<provider>.com
-                                                                    (token never sent on)
+```mermaid
+sequenceDiagram
+    participant C as client SDK
+    participant W as Worker
+    participant U as api.provider.com
+    C->>W: proxy token in the SDK's auth slot
+    W->>W: look up SHA-256(token) in KV
+    alt not found / disabled
+        W-->>C: 401
+    else provider not in token scope
+        W-->>C: 403
+    else valid
+        W->>W: strip ALL auth headers, set ONE real key
+        W->>U: forward (token never sent on)
+    end
 ```
 
 ## The decisions that keep it safe
@@ -29,6 +33,6 @@ auth slot = <token>  ──▶  extract token from auth slot
 
 - **Revoke-safe `lastUsed`.** Usage timestamps live in a separate `<hash>:lu` key, not in the token record. Stamping "last used" on a hot path can therefore never recreate or re-enable a record that was deleted or disabled - a revoked token stays revoked.
 
-## Scope (v1)
+## Per-token scope
 
-Per-token: label, provider scope, enable/disable, revoke, last-used. Rate limits, spend caps, expiry, and per-token analytics are deliberately deferred - the data model leaves room without carrying the weight now.
+Label, provider scope, enable/disable, revoke, last-used, plus (since v2.1) expiry ([token-expiry-check-at-validate.md](token-expiry-check-at-validate.md)) and rate limiting ([rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md)). Spend caps and per-token analytics stay deliberately deferred - the data model leaves room without carrying the weight now.

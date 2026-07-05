@@ -18,6 +18,6 @@ Every proxied request (and every WS upgrade) stamped `lastUsed` with one KV writ
 
 Accepted trades: a failed put is not retried until the next day (cosmetic column), and isolate churn re-stamps at worst a handful of times per token per day. Reads stay unmemoized - 100x headroom, and a memo would delay revocation for no binding win.
 
-Related: [[proxy-token-security]] (why `lastUsed` lives in its own `:lu` side key), [[rate-limit-binding-free-and-loose]].
+Related: [proxy-token-security.md](proxy-token-security.md) (why `lastUsed` lives in its own `:lu` side key), [rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md).
 
 Sources: [KV pricing](https://developers.cloudflare.com/kv/platform/pricing/), [KV limits](https://developers.cloudflare.com/kv/platform/limits/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).

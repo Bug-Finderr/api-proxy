@@ -12,11 +12,11 @@ Browser SDK callers trigger a CORS preflight: the browser sends an `OPTIONS` req
 
 `handleProxy` short-circuits `OPTIONS` to a `204` **before** any token work (`src/proxy.ts`, the `if (req.method === "OPTIONS")` at the top, ahead of `proxyRequest`):
 
-```
-inbound request
-   │
-   ├─ method === OPTIONS? ──▶ corsPreflight ──▶ 204 (no token check)
-   └─ else                ──▶ extractToken / routeProvider / validate / forward
+```mermaid
+flowchart LR
+    R[inbound request] --> O{"method === OPTIONS?"}
+    O -- yes --> P["corsPreflight: 204, no token check"]
+    O -- no --> A["extractToken / routeProvider / validate / forward"]
 ```
 
 The `204` reflects the caller's `Origin` and echoes the requested headers back (`access-control-allow-headers` = the inbound `access-control-request-headers`, else `*`). `withCors` also `append`s `Vary: Origin` to every response so caches don't mix per-origin replies.
@@ -35,9 +35,15 @@ Gemini's resumable upload returns an **absolute** `x-goog-upload-url` pointing s
 
 `rewriteToUpstream` (`src/upstreams.ts`) only swaps `protocol`/`hostname`/`port` on the *request* URL - it never rewrites the absolute `x-goog-upload-url` Google returns. So the client uploads bytes **directly to Google**, bypassing the Worker and its body cap. The proxy's only job is to let the browser *read* that header: `withCors` sets `access-control-expose-headers` to the `EXPOSE_HEADERS` constant (`x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity`).
 
-```
-client ──▶ proxy ──▶ Google : returns absolute x-goog-upload-url (not rewritten)
-client ───────────▶ Google : uploads bytes straight to that URL (skips Worker + 100MB cap)
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant P as proxy
+    participant G as Google
+    C->>P: start resumable upload (proxy token)
+    P->>G: forward (real key swapped in)
+    G-->>C: absolute x-goog-upload-url (not rewritten)
+    C->>G: upload bytes straight to that URL (skips Worker + 100MB cap)
 ```
 
 ### Decision we keep

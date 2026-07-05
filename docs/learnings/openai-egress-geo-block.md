@@ -6,18 +6,11 @@ Through the Worker, OpenAI returned `403 unsupported_country_region_territory` i
 
 ## The mechanism in one picture
 
-```
-          ┌─────────── Cloudflare ───────────┐
-client ──▶│ Worker runs in the colo nearest  │
-          │ the client; fetch() egresses from│
-          │ THAT colo (fixed per invocation) │
-          └───────┬───────────────┬──────────┘
-                  │               │
-         egress via SIN   egress via HKG
-                  │               │
-                  ▼               ▼
-              OpenAI 200      OpenAI 403  ← "unsupported_country_region_territory"
-                              (HKG is a region OpenAI does not serve)
+```mermaid
+flowchart LR
+    C[client] --> W["Worker runs in the colo nearest the client;<br/>fetch() egresses from THAT colo (fixed per invocation)"]
+    W -- "egress via SIN" --> OK["OpenAI 200"]
+    W -- "egress via HKG" --> KO["OpenAI 403 unsupported_country_region_territory<br/>(HKG is a region OpenAI does not serve)"]
 ```
 
 Roughly 40% of invocations happened to egress via HKG, hence the ~40% failure.
@@ -41,19 +34,13 @@ Route **only the OpenAI hop** through a Durable Object pinned to North America w
 
 The egress DO is **pooled across 8 named instances** (`EGRESS_POOL=8`, `idFromName('oa-egress-N')` with a random `N`), so all OpenAI traffic isn't funneled through one DO.
 
-```
-OpenAI request
-      │
-      ▼
- direct edge fetch() ──── 200 ──▶ return (fast path, ~60%)
-      │
-   geo-403?
-      │ yes
-      ▼
- re-issue through US-pinned DO (locationHint:"wnam")
-      │
-      ▼
- DO runs in a US colo ─▶ fetch() egresses US ─▶ OpenAI 200 ─▶ return
+```mermaid
+flowchart TD
+    A[OpenAI request] --> B["direct edge fetch()"]
+    B -- "200 (fast path, ~60%)" --> R[return]
+    B -- "geo-403" --> D["re-issue through the US-pinned DO<br/>(locationHint: wnam)"]
+    D --> E["DO runs in a US colo, so fetch() egresses US"]
+    E -- "OpenAI 200" --> R
 ```
 
 Why this shape:
