@@ -1,8 +1,8 @@
 import {
   createExecutionContext,
-  env,
   waitOnExecutionContext,
 } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { createToken, updateToken } from "../src/tokens";

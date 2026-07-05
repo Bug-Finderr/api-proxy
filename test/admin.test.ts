@@ -1,8 +1,8 @@
 import {
   createExecutionContext,
-  env,
   waitOnExecutionContext,
 } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { getValidated, sha256hex } from "../src/tokens";
