@@ -136,7 +136,12 @@ export async function touchLastUsed(
   const now = new Date().toISOString();
   const day = now.slice(0, 10);
   if (luStampedDay.get(hash) === day) return;
-  luStampedDay.set(hash, day);
-  // Write only the side key; never touch the token record (avoids resurrecting a revoke).
-  await kv.put(luKey(hash), now);
+  luStampedDay.set(hash, day); // claim before the await so concurrent requests dedupe
+  try {
+    // Write only the side key; never touch the token record (avoids resurrecting a revoke).
+    await kv.put(luKey(hash), now);
+  } catch {
+    // Release the claim so a later request retries today; rejected puts burn no quota.
+    luStampedDay.delete(hash);
+  }
 }

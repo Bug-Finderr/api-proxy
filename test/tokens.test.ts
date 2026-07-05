@@ -133,6 +133,20 @@ describe("touchLastUsed", () => {
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeNull();
   });
 
+  it("releases the day-claim on a failed put so a later call retries", async () => {
+    const { hash } = await createToken(env.TOKENS, {
+      label: "retry",
+      providers: ["openai"],
+      token: "retry-t",
+    });
+    const failing = {
+      put: () => Promise.reject(new Error("KV PUT failed: 429")),
+    } as unknown as KVNamespace;
+    await touchLastUsed(failing, hash); // must not throw, must release the claim
+    await touchLastUsed(env.TOKENS, hash); // same-day retry must write
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
+  });
+
   it("does not resurrect a disabled token when lastUsed is stamped", async () => {
     const { token, hash } = await createToken(env.TOKENS, {
       label: "rev",
