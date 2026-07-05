@@ -14,3 +14,4 @@ Each file: the problem, what we found, and the decision we keep.
 - [cors-preflight-and-upload-passthrough.md](cors-preflight-and-upload-passthrough.md) - why the browser preflight is answered before auth, and why the Gemini upload URL is passed through untouched
 - [compat-is-the-auth-slot-not-the-sdk.md](compat-is-the-auth-slot-not-the-sdk.md) - why one test per auth slot proves every SDK/language/wrapper, so we don't add per-client tests
 - [websocket-proxy-auth-slots.md](websocket-proxy-auth-slots.md) - proxying wss (OpenAI Realtime/Responses, Gemini Live), and why a browser smuggles the key in a subprotocol the worker must rewrite
+- [kv-free-tier-write-quota.md](kv-free-tier-write-quota.md) - 1,000 KV writes/day (account-wide, 100x scarcer than reads); why `lastUsed` stamps at most once per day
