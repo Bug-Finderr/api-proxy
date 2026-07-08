@@ -43,10 +43,12 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 const providerPills = (providers: CoarseProvider[]) =>
   providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
-const usedOn = (iso?: string) => {
-  if (!iso) return "never";
-  return iso.slice(0, 10); // stamped at most once per UTC day, so the date is the resolution
-};
+// <time datetime="ISO"> with a labeled-UTC fallback; the dashboard's after-settle handler
+// localizes them. lastUsed stamps once per UTC day, so it reads "first use of that UTC day".
+const localTime = (iso?: string) =>
+  iso
+    ? html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`
+    : "never";
 
 export const tokenRow = (r: Row) => {
   const expired = !!r.expiresAt && Date.parse(r.expiresAt) <= Date.now();
@@ -56,8 +58,8 @@ export const tokenRow = (r: Row) => {
 		<td class="mono muted">…${r.last4}</td>
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
-		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${r.expiresAt ? `${r.expiresAt.slice(0, 16).replace("T", " ")} UTC` : "never"}</span>`}</td>
-		<td class="muted">${usedOn(r.lastUsed)}</td>
+		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${localTime(r.expiresAt)}</span>`}</td>
+		<td class="muted">${localTime(r.lastUsed)}</td>
 		<td style="text-align:right;white-space:nowrap">
 			<button
 				class="ghost"
@@ -183,6 +185,7 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::response-error="const x = event.detail.xhr; if (x.status === 401) { location.href = '/admin' } else { document.getElementById('flash').textContent = x.responseText || ('request failed (' + x.status + ')') }"
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
+			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
 		>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>

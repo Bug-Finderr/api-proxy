@@ -139,6 +139,14 @@ describe("admin token CRUD", () => {
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
 
+    // the row renders a <time> element (machine-readable ISO + labeled-UTC fallback) that the
+    // dashboard's after-settle handler localizes in the browser
+    const table = await (
+      await call("/admin/api/tokens", { headers: { cookie } })
+    ).text();
+    expect(table).toContain('datetime="2030-01-01T00:00:00.000Z"');
+    expect(table).toContain("2030-01-01 00:00 UTC");
+
     const bad = await call("/admin/api/tokens", {
       ...form({
         label: "bad-exp",
@@ -179,6 +187,10 @@ describe("admin token CRUD", () => {
     expect(page).toContain('id="flash"');
     expect(page).toContain("hx-on::response-error");
     expect(page).toContain("hx-on::send-error");
+    // timestamps localize in the browser: the after-settle handler rewrites <time> elements
+    expect(page).toContain("hx-on::after-settle");
+    expect(page).toContain("toLocaleString");
+    expect(page).toContain("time[datetime]");
   });
 
   it("rejects a malformed token id on PUT and DELETE", async () => {
