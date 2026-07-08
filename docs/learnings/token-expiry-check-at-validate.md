@@ -20,6 +20,6 @@ if (meta.expiresAt) {
 }
 ```
 
-**Fail-closed on malformed input:** `NaN <= Date.now()` is `false`, which fails *open* (a garbage `expiresAt` stays valid) - so `Number.isNaN(t)` is checked explicitly. The admin form converts its local `datetime-local` value to UTC ISO and rejects unparseable input at creation.
+**Fail-closed on malformed input:** `NaN <= Date.now()` is `false`, which fails *open* (a garbage `expiresAt` stays valid) - so `Number.isNaN(t)` is checked explicitly. The admin form converts its local `datetime-local` value to UTC ISO in the browser; the route rejects unparseable or offset-less input at creation (an offset-less string would be read in the runtime's timezone, not the admin's).
 
 Related: [proxy-token-security.md](proxy-token-security.md).

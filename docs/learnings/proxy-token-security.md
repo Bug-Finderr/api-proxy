@@ -13,7 +13,7 @@ Share provider access without exposing the real key, revocably, with unmodified 
 ## The decision we keep
 
 - **The token rides the SDK's own auth slot** - the client swaps only base URL and key ([provider-routing-by-auth-header.md](provider-routing-by-auth-header.md)).
-- **Strip-all-then-set-one** (`swapAuth`): delete every inbound auth slot (on wss also the subprotocol and `?key=`), set exactly one real key.
+- **Strip-all-then-set-one** (`swapAuth`): delete every inbound auth slot - the headers and `?key=` on both paths, plus the subprotocol on wss - and set exactly one real key.
 - **Hashed at rest**, plaintext shown once - KV never holds a usable credential.
 - **`lastUsed` in a side key** (`<hash>:lu`), never the record - the hot path physically cannot re-enable a revoked token.
 

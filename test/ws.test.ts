@@ -168,6 +168,25 @@ describe("handleWsProxy: validation (upstream never opened)", () => {
     expect(res.status).toBe(403);
     expect(captured).toBeNull();
   });
+  it("503 when the token store rejects (KV outage)", async () => {
+    const broken = {
+      ...env,
+      TOKENS: {
+        get: () => Promise.reject(new Error("kv down")),
+      } as unknown as KVNamespace,
+    };
+    const ctx = createExecutionContext();
+    const res = await handleWsProxy(
+      new Request("https://proxy.example/v1/realtime", {
+        headers: { authorization: "Bearer whatever" },
+      }),
+      broken,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503);
+    expect(captured).toBeNull();
+  });
 });
 
 describe("handleWsProxy: auth swap + upgrade", () => {

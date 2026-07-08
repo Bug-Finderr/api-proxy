@@ -174,25 +174,54 @@ describe("auth failures (upstream never called)", () => {
 });
 
 describe("security invariant", () => {
-  it("never forwards the proxy token upstream", async () => {
+  it("never forwards the proxy token upstream in any slot (headers or URL)", async () => {
     await createToken(env.TOKENS, {
       label: "sec",
       providers: ["openai"],
       token: "SECRET-TOKEN",
     });
+    // Dual-slot client: header auth plus a belt-and-braces ?key= in the URL.
     await call(
-      new Request("https://proxy.example/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: "Bearer SECRET-TOKEN" },
-        body: "{}",
-      }),
+      new Request(
+        "https://proxy.example/v1/chat/completions?key=SECRET-TOKEN",
+        {
+          method: "POST",
+          headers: { authorization: "Bearer SECRET-TOKEN" },
+          body: "{}",
+        },
+      ),
     );
     const slots = [
+      captured!.url,
       captured!.headers.get("authorization"),
       captured!.headers.get("x-api-key"),
       captured!.headers.get("x-goog-api-key"),
     ].join("|");
     expect(slots).not.toContain("SECRET-TOKEN");
+  });
+});
+
+describe("token store outage", () => {
+  it("503s when KV rejects instead of surfacing an unhandled exception", async () => {
+    const broken = {
+      ...env,
+      TOKENS: {
+        get: () => Promise.reject(new Error("kv down")),
+      } as unknown as KVNamespace,
+    };
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://proxy.example/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: "Bearer whatever" },
+        body: "{}",
+      }),
+      broken,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503);
+    expect(captured).toBeNull();
   });
 });
 

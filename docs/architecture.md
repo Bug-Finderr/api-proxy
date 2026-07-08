@@ -32,10 +32,10 @@ flowchart LR
 `handleProxy` is a thin wrapper: it answers an `OPTIONS` preflight directly, otherwise runs `proxyRequest` and reflects CORS headers onto the result (§8). `proxyRequest`:
 
 1. **Extract** the token from whichever auth slot it arrived in and **route** the provider from that slot (+ path); missing either → **401**. (§4)
-2. **Validate** `SHA-256(token)` against KV - a miss, a disabled token, or an expired one → **401**. (§6)
+2. **Validate** `SHA-256(token)` against KV - a miss, a disabled token, or an expired one → **401**; a KV read failure (outage, exhausted quota) → **503**. (§6)
 3. Requested provider not in the token's scope → **403**. (§4)
 4. **Rate-limit** on the hash - over the cap → **429** + `Retry-After` (fail-open). (§7)
-5. **Rewrite** the URL to the upstream - protocol/host/port only; strip `?key=` for Gemini. (§13)
+5. **Rewrite** the URL to the upstream - protocol/host/port only; strip `?key=` for every provider. (§13)
 6. **Swap auth** - strip every inbound auth header, set the one real key. (§5)
 7. **Fetch** the upstream (OpenAI adds a geo-403 fallback, §9), stream the response back unbuffered, and stamp `lastUsed` fire-and-forget. (§6, §9)
 
@@ -45,6 +45,7 @@ flowchart TD
     B -- no --> E1[401]
     B -- yes --> C{"SHA-256 valid + active + unexpired in KV? (§6)"}
     C -- no --> E2[401]
+    C -- "KV read fails" --> E5["503"]
     C -- yes --> D{"provider in token scope?"}
     D -- no --> E3[403]
     D -- yes --> F{"under the rate limit? (§7)"}
@@ -83,7 +84,7 @@ switch (provider) {
 }
 ```
 
-Strip-all-then-set-one guarantees the proxy token is never forwarded upstream even if a client sends it in an unexpected slot, and closes dual-header leaks. A test asserts the token never appears in any outbound auth header. See [`proxy-token-security.md`](learnings/proxy-token-security.md).
+Strip-all-then-set-one guarantees the proxy token is never forwarded upstream even if a client sends it in an unexpected slot, and closes dual-slot leaks: the `?key=` query slot is deleted for every provider too, not just Gemini. A test asserts the token never appears in any outbound auth header or in the outbound URL. See [`proxy-token-security.md`](learnings/proxy-token-security.md).
 
 ## 6. Token model & lifecycle
 
@@ -197,11 +198,11 @@ Caveats: the rate limit gates the **connection**, not each frame (one upgrade = 
 
 ## 11. Admin dashboard
 
-Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus **HTMX 2.x** loaded from a CDN (no authored client JS beyond one inline `hx-on` attribute; nothing in the worker bundle but markup + attributes).
+Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus **HTMX 2.x** loaded from a CDN (no authored client JS beyond two inline `hx-on` attributes; nothing in the worker bundle but markup + attributes).
 
 - **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` sets an HMAC-SHA256-signed cookie `cm_admin=<ts>.<sig>` (`Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`.
-- **CRUD:** HTMX-driven over `/admin/api/tokens` - list (`GET`), create (`POST`; parses label, provider checkboxes, an optional `datetime-local` expiry normalized to UTC ISO, custom-or-generated token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
-- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created plaintext is shown once; expired tokens render `expired` and dim the row. The list refreshes on load, on the `tokens-changed` event, and **every 10 s** (to surface new tokens / last-used despite KV's ~60 s list propagation).
+- **CRUD:** HTMX-driven over `/admin/api/tokens` - list (`GET`), create (`POST`; parses label, provider checkboxes, an optional `datetime-local` expiry the form converts to UTC ISO in the browser, custom-or-generated token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
+- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created plaintext is shown once; expired tokens render `expired` and dim the row. The list refreshes on load, on the `tokens-changed` event, and **every 120 s while the tab is visible** - each refresh costs a `kv.list`, and the free tier's 1,000 lists/day (account-wide) rules out tighter polling.
 
 ## 12. Real key handling
 

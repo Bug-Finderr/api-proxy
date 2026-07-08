@@ -6,7 +6,7 @@ Which clients do we need a compat test for? The candidates are endless: the offi
 
 ## What we found
 
-The proxy routes and authenticates purely by auth slot plus one path check, and forwards path + query + body verbatim. So a client's compatibility is decided by exactly two things: (1) which of the four slots (architecture §4) it puts the key in, and (2) whether it lets you point its base URL at an arbitrary host. The SDK, the language, and the wrapper are irrelevant once those two are fixed.
+The proxy routes and authenticates purely by auth slot plus one path check, and forwards path + body + query verbatim (minus the `?key=` auth slot, stripped for every provider). So a client's compatibility is decided by exactly two things: (1) which of the four slots (architecture §4) it puts the key in, and (2) whether it lets you point its base URL at an arbitrary host. The SDK, the language, and the wrapper are irrelevant once those two are fixed.
 
 A source-level survey (official SDK source, provider docs, and wrapper source) confirms every client collapses onto one of these already-handled routes. **None hits a new slot or an unhandled path.** The table below lists the four provider routes SDKs actually use (`?key=` is covered after it):
 

@@ -13,7 +13,7 @@ import {
   routeProvider,
 } from "./proxy";
 import { getValidatedByHash, sha256hex, touchLastUsed } from "./tokens";
-import type { Env, Provider } from "./types";
+import type { Env, Provider, TokenMetadata } from "./types";
 import { rewriteToUpstream } from "./upstreams";
 
 // OpenAI browser clients smuggle the key as a Sec-WebSocket-Protocol entry, since a browser
@@ -146,7 +146,13 @@ export async function handleWsProxy(
     return new Response("missing token", { status: 401 });
 
   const hash = await sha256hex(token);
-  const meta = await getValidatedByHash(env.TOKENS, hash);
+  let meta: TokenMetadata | null;
+  try {
+    meta = await getValidatedByHash(env.TOKENS, hash);
+  } catch {
+    // KV outage / exhausted read quota: a controlled 503, not an unhandled 1101.
+    return new Response("token store unavailable", { status: 503 });
+  }
   if (!meta) return new Response("invalid or revoked token", { status: 401 });
   if (!meta.providers.includes(coarse(provider)))
     return new Response("token not allowed for provider", { status: 403 });

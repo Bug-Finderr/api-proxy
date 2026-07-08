@@ -2,7 +2,7 @@
 // MUST NOT import Hono or any admin code.
 
 import { getValidatedByHash, sha256hex, touchLastUsed } from "./tokens";
-import type { CoarseProvider, Env, Provider } from "./types";
+import type { CoarseProvider, Env, Provider, TokenMetadata } from "./types";
 import { rewriteToUpstream } from "./upstreams";
 
 /** Pull the candidate token from whichever auth slot the SDK used. */
@@ -159,7 +159,13 @@ async function proxyRequest(
   if (!token || !provider) return errorResponse(401, "missing token");
 
   const hash = await sha256hex(token);
-  const meta = await getValidatedByHash(env.TOKENS, hash);
+  let meta: TokenMetadata | null;
+  try {
+    meta = await getValidatedByHash(env.TOKENS, hash);
+  } catch {
+    // KV outage / exhausted read quota: a controlled 503, not an unhandled 1101.
+    return errorResponse(503, "token store unavailable");
+  }
   if (!meta) return errorResponse(401, "invalid or revoked token");
   if (!meta.providers.includes(coarse(provider)))
     return errorResponse(403, "token not allowed for provider");
@@ -181,8 +187,9 @@ async function proxyRequest(
 
   const realKey = realKeyFor(provider, env);
   rewriteToUpstream(url, provider, env);
-  if (provider === "gemini" || provider === "gemini-openai")
-    url.searchParams.delete("key");
+  // Strip the query auth slot for every provider (the URL analogue of swapAuth): a dual-slot
+  // client that also sends ?key= must not leak the proxy token into upstream request logs.
+  url.searchParams.delete("key");
 
   const headers = new Headers(req.headers);
   swapAuth(headers, provider, realKey);

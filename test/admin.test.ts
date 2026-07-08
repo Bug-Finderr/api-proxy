@@ -110,6 +110,54 @@ describe("admin token CRUD", () => {
     expect(await getValidated(env.TOKENS, "to-delete")).toBeNull();
   });
 
+  it("stores a UTC ISO expiresAt and 400s an unparseable one", async () => {
+    const cookie = await login();
+    const ok = await call("/admin/api/tokens", {
+      ...form({
+        label: "exp",
+        providers: "openai",
+        token: "with-expiry",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      }),
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+    });
+    expect(ok.status).toBe(200);
+    const meta = await getValidated(env.TOKENS, "with-expiry");
+    expect(meta?.expiresAt).toBe("2030-01-01T00:00:00.000Z");
+
+    const bad = await call("/admin/api/tokens", {
+      ...form({
+        label: "bad-exp",
+        providers: "openai",
+        token: "bad-expiry",
+        expiresAt: "not-a-date",
+      }),
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+    });
+    expect(bad.status).toBe(400);
+
+    // An offset-less value (raw API call bypassing the form) is rejected - it would be
+    // read in the runtime's local timezone, not the admin's.
+    const bare = await call("/admin/api/tokens", {
+      ...form({
+        label: "bare-exp",
+        providers: "openai",
+        token: "bare-expiry",
+        expiresAt: "2030-01-01T00:00",
+      }),
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+    });
+    expect(bare.status).toBe(400);
+  });
+
+  it("dashboard markup pins the browser-side UTC conversion and the visibility-gated poll", async () => {
+    const cookie = await login();
+    const page = await (await call("/admin", { headers: { cookie } })).text();
+    expect(page).toContain("hx-on::config-request");
+    expect(page).toContain("toISOString()");
+    expect(page).toContain("every 120s [document.visibilityState==='visible']");
+  });
+
   it("rejects a malformed token id on PUT and DELETE", async () => {
     const cookie = await login();
     const put = await call("/admin/api/tokens/not-a-hash", {

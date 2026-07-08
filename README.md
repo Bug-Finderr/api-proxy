@@ -4,7 +4,7 @@ A single Cloudflare Worker that reverse-proxies the OpenAI, Anthropic, and Googl
 
 ## Use it
 
-Works with the official **OpenAI**, **Anthropic**, and **Google GenAI** SDKs (Python and Node) - and, since the worker routes by auth header and forwards verbatim, with anything that speaks those APIs: the Vercel AI SDK, LangChain, LiteLLM, OpenAI-compatible tools, or raw `curl`. A client changes only **two things**: the base URL and the API key (a proxy token).
+Works with the official **OpenAI**, **Anthropic**, and **Google GenAI** SDKs (Python and Node) - and, since the worker routes by auth header and forwards everything else verbatim, with anything that speaks those APIs: the Vercel AI SDK, LangChain, LiteLLM, OpenAI-compatible tools, or raw `curl`. A client changes only **two things**: the base URL and the API key (a proxy token).
 
 | Client | base URL | API key |
 |---|---|---|
@@ -46,7 +46,7 @@ A browser can't set the `Authorization` header on a WebSocket, so OpenAI smuggle
 
 ## How it works
 
-The proxy token rides in the SDK's normal auth slot. The worker validates it, checks it's scoped to the requested provider, strips every inbound auth header, sets the one real key, and forwards the request (path + query verbatim, streaming included). Routing is by which auth header the token arrives in - see [docs/architecture.md](docs/architecture.md) for the routing table and full design.
+The proxy token rides in the SDK's normal auth slot. The worker validates it, checks it's scoped to the requested provider, strips every inbound auth slot (headers and the `?key=` query param), sets the one real key, and forwards the request (path + remaining query verbatim, streaming included). Routing is by which auth header the token arrives in - see [docs/architecture.md](docs/architecture.md) for the routing table and full design.
 
 ## Setup
 
@@ -70,7 +70,7 @@ Optional plain vars (NOT secrets) override the upstreams; they default to the re
 
 ## Admin dashboard
 
-Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token or generate one. The token is shown **once** at creation - copy it then; only its SHA-256 hash is stored. Disable or delete any token instantly.
+Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token or generate one. The token is shown **once** at creation - copy it then; only its SHA-256 hash is stored. Disable or delete any token at any time.
 
 ## Per-token controls
 
@@ -82,7 +82,7 @@ Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: 
 
 - Real provider keys are Cloudflare secrets, injected only into outbound requests - never in KV, never returned to callers.
 - Tokens are stored as SHA-256 hashes; a KV/dashboard dump yields unusable hashes, not live tokens.
-- The worker strips all inbound auth headers before setting the real key, so a proxy token is never forwarded upstream.
+- The worker strips every inbound auth slot - headers and the `?key=` query param - before setting the real key, so a proxy token is never forwarded upstream.
 - Do not host the worker on a `*.openai.azure.com` / `*.cognitiveservices.azure.com` domain (the OpenAI SDK switches to Azure auth on those hostnames).
 
 ## Testing

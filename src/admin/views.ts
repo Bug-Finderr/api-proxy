@@ -50,7 +50,7 @@ export const tokenRow = (r: Row) => {
 		<td class="mono muted">…${r.last4}</td>
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
-		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${r.expiresAt ? r.expiresAt.slice(0, 10) : "never"}</span>`}</td>
+		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${r.expiresAt ? `${r.expiresAt.slice(0, 16).replace("T", " ")} UTC` : "never"}</span>`}</td>
 		<td class="muted">${timeAgo(r.lastUsed)}</td>
 		<td style="text-align:right;white-space:nowrap">
 			<button
@@ -147,6 +147,7 @@ export const dashboardPage = () => html`<!doctype html>
 						hx-post="/admin/api/tokens"
 						hx-target="#created"
 						hx-swap="innerHTML"
+						hx-on::config-request="if(event.detail.parameters.expiresAt) event.detail.parameters.expiresAt = new Date(event.detail.parameters.expiresAt).toISOString()"
 						hx-on::after-request="if(event.detail.successful) this.reset()"
 					>
 						<div class="row">
@@ -175,7 +176,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body, every 10s">
+					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body, every 120s [document.visibilityState==='visible']">
 						Loading…
 					</div>
 				</div>

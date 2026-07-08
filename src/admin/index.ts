@@ -117,8 +117,11 @@ app.post("/api/tokens", async (c) => {
   const rawExp = String(fd.get("expiresAt") || "").trim();
   let expiresAt: string | undefined;
   if (rawExp) {
-    const d = new Date(rawExp); // datetime-local is local time; toISOString normalizes to UTC
-    if (Number.isNaN(d.getTime())) return c.text("invalid expiry", 400);
+    // The form submits UTC ISO (converted in the browser). An offset-less value is rejected:
+    // it would be read in the runtime's local timezone (UTC in production, host tz in dev).
+    const d = new Date(rawExp);
+    if (Number.isNaN(d.getTime()) || !/(Z|[+-]\d{2}:\d{2})$/i.test(rawExp))
+      return c.text("invalid expiry", 400);
     expiresAt = d.toISOString();
   }
   const { token } = await createToken(c.env.TOKENS, {
