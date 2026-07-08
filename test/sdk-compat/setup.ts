@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 
 // Fake real-keys injected as the worker's bindings. Tests assert these reach the mock
-// upstream (proving the swap) and that the doppelganger token never does.
+// upstream (proving the swap) and that the proxy token never does.
 export const FAKE = {
   openai: "FAKE-OPENAI-KEY",
   anthropic: "FAKE-ANTHROPIC-KEY",

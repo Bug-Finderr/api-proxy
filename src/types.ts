@@ -7,13 +7,15 @@ export interface TokenMetadata {
   providers: CoarseProvider[];
   status: "active" | "disabled";
   createdAt: string; // ISO
+  expiresAt?: string; // ISO (UTC); absent = never expires
   // lastUsed is stored in a separate `<hash>:lu` key (see tokens.ts), not here.
-  // reserved for Later (absent in v1): expiresAt, limits, spend
+  // reserved for Later: limits, spend
 }
 
 export interface Env {
   TOKENS: KVNamespace;
   US_EGRESS: DurableObjectNamespace; // North-America-pinned egress relay (see egress.ts)
+  RATE_LIMITER: RateLimit; // per-token RPM limiter (Workers Rate Limiting binding)
   OPENAI_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;

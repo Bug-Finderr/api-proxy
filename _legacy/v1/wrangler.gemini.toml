@@ -1,5 +1,5 @@
-name = "openai-proxy"
-main = "src/openai.ts"
+name = "gemini-proxy"
+main = "gemini.ts"
 compatibility_date = "2025-01-01"
 workers_dev = true
 preview_urls = false

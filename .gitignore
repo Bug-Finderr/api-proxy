@@ -43,3 +43,7 @@ CLAUDE.md
 
 # claude local settings
 .claude/settings.local.json
+
+# python venv for the separate-runner compat tests + caches
+.venv/
+__pycache__/

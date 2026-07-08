@@ -114,10 +114,21 @@ app.post("/api/tokens", async (c) => {
   const fd = await c.req.formData();
   const providers = parseProviders(fd);
   const custom = fd.get("token");
+  const rawExp = String(fd.get("expiresAt") || "").trim();
+  let expiresAt: string | undefined;
+  if (rawExp) {
+    // The form submits UTC ISO (converted in the browser). An offset-less value is rejected:
+    // it would be read in the runtime's local timezone (UTC in production, host tz in dev).
+    const d = new Date(rawExp);
+    if (Number.isNaN(d.getTime()) || !/(Z|[+-]\d{2}:\d{2})$/i.test(rawExp))
+      return c.text("invalid expiry", 400);
+    expiresAt = d.toISOString();
+  }
   const { token } = await createToken(c.env.TOKENS, {
     label: String(fd.get("label") || ""),
     providers: providers.length ? providers : ["openai"],
     token: custom ? String(custom) : undefined,
+    expiresAt,
   });
   return c.html(createdNotice(token), 200, { "HX-Trigger": "tokens-changed" });
 });

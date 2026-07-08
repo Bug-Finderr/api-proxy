@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import {
   createToken,
@@ -21,8 +21,8 @@ describe("sha256hex", () => {
 });
 
 describe("generateToken", () => {
-  it("has the dgk_ prefix and a url-safe body", () => {
-    expect(generateToken()).toMatch(/^dgk_[A-Za-z0-9_-]{32,}$/);
+  it("has the ptk_ prefix and a url-safe body", () => {
+    expect(generateToken()).toMatch(/^ptk_[A-Za-z0-9_-]{32,}$/);
   });
   it("is unique across calls", () => {
     expect(generateToken()).not.toBe(generateToken());
@@ -35,7 +35,7 @@ describe("createToken + getValidated", () => {
       label: "alice",
       providers: ["openai"],
     });
-    expect(token).toMatch(/^dgk_/);
+    expect(token).toMatch(/^ptk_/);
     expect(meta.last4).toBe(token.slice(-4));
     const got = await getValidated(env.TOKENS, token);
     expect(got?.label).toBe("alice");
@@ -119,6 +119,34 @@ describe("touchLastUsed", () => {
     expect(row?.label).toBe("tu");
   });
 
+  it("writes at most once per UTC day per token", async () => {
+    const { hash } = await createToken(env.TOKENS, {
+      label: "throttle",
+      providers: ["openai"],
+      token: "throttle-t",
+    });
+    await touchLastUsed(env.TOKENS, hash);
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
+    // a same-day re-touch must not rewrite the deleted stamp
+    await env.TOKENS.delete(`${hash}:lu`);
+    await touchLastUsed(env.TOKENS, hash);
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeNull();
+  });
+
+  it("releases the day-claim on a failed put so a later call retries", async () => {
+    const { hash } = await createToken(env.TOKENS, {
+      label: "retry",
+      providers: ["openai"],
+      token: "retry-t",
+    });
+    const failing = {
+      put: () => Promise.reject(new Error("KV PUT failed: 429")),
+    } as unknown as KVNamespace;
+    await touchLastUsed(failing, hash); // must not throw, must release the claim
+    await touchLastUsed(env.TOKENS, hash); // same-day retry must write
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
+  });
+
   it("does not resurrect a disabled token when lastUsed is stamped", async () => {
     const { token, hash } = await createToken(env.TOKENS, {
       label: "rev",
@@ -127,6 +155,39 @@ describe("touchLastUsed", () => {
     });
     await updateToken(env.TOKENS, hash, { status: "disabled" });
     await touchLastUsed(env.TOKENS, hash); // must not re-enable the revoked token
+    expect(await getValidated(env.TOKENS, token)).toBeNull();
+  });
+});
+
+describe("expiry (getValidatedByHash via getValidated)", () => {
+  const mk = (token: string, expiresAt?: string) =>
+    createToken(env.TOKENS, {
+      label: token,
+      providers: ["openai"],
+      token,
+      expiresAt,
+    });
+
+  it("absent expiresAt stays valid", async () => {
+    const { token } = await mk("exp-none");
+    expect(await getValidated(env.TOKENS, token)).not.toBeNull();
+  });
+  it("future expiresAt is valid", async () => {
+    const { token } = await mk(
+      "exp-future",
+      new Date(Date.now() + 3_600_000).toISOString(),
+    );
+    expect(await getValidated(env.TOKENS, token)).not.toBeNull();
+  });
+  it("past expiresAt is rejected", async () => {
+    const { token } = await mk(
+      "exp-past",
+      new Date(Date.now() - 1000).toISOString(),
+    );
+    expect(await getValidated(env.TOKENS, token)).toBeNull();
+  });
+  it("malformed expiresAt is rejected (fail-closed)", async () => {
+    const { token } = await mk("exp-bad", "not-a-date");
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
 });

@@ -1,5 +1,4 @@
-// KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown
-// once at creation and never persisted.
+// KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown once at creation and never persisted.
 import type { CoarseProvider, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
@@ -18,15 +17,16 @@ function base64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** A fresh opaque token: dgk_ + 32 url-safe chars (24 random bytes). */
+/** A fresh opaque token: ptk_ + 32 url-safe chars (24 random bytes). */
 export function generateToken(): string {
-  return `dgk_${base64url(crypto.getRandomValues(new Uint8Array(24)))}`;
+  return `ptk_${base64url(crypto.getRandomValues(new Uint8Array(24)))}`;
 }
 
 export interface CreateInput {
   label: string;
   providers: CoarseProvider[];
   token?: string; // admin-typed; otherwise generated
+  expiresAt?: string; // ISO (UTC); absent = never expires
 }
 
 export async function createToken(
@@ -41,6 +41,7 @@ export async function createToken(
     providers: input.providers,
     status: "active",
     createdAt: new Date().toISOString(),
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
   };
   await kv.put(hash, JSON.stringify(meta));
   return { token, hash, meta };
@@ -67,7 +68,12 @@ export async function getValidatedByHash(
   hash: string,
 ): Promise<TokenMetadata | null> {
   const meta = parseMeta(await kv.get(hash));
-  return meta?.status === "active" ? meta : null;
+  if (meta?.status !== "active") return null;
+  if (meta.expiresAt) {
+    const t = Date.parse(meta.expiresAt);
+    if (Number.isNaN(t) || t <= Date.now()) return null; // fail-closed on bad/past
+  }
+  return meta;
 }
 
 /** Resolve a plaintext token to its metadata, only if it exists and is active. */
@@ -120,10 +126,22 @@ export async function deleteToken(
   await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
 }
 
+// One stamp per UTC day per isolate: the dashboard shows only the date, and the free tier allows 1,000 KV writes/day account-wide.
+const luStampedDay = new Map<string, string>();
+
 export async function touchLastUsed(
   kv: KVNamespace,
   hash: string,
 ): Promise<void> {
-  // Write only the side key; never touch the token record (avoids resurrecting a revoke).
-  await kv.put(luKey(hash), new Date().toISOString());
+  const now = new Date().toISOString();
+  const day = now.slice(0, 10);
+  if (luStampedDay.get(hash) === day) return;
+  luStampedDay.set(hash, day); // claim before the await so concurrent requests dedupe
+  try {
+    // Write only the side key; never touch the token record (avoids resurrecting a revoke).
+    await kv.put(luKey(hash), now);
+  } catch {
+    // Release the claim so a later request retries today; rejected puts burn no quota.
+    luStampedDay.delete(hash);
+  }
 }

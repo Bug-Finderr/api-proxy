@@ -1,8 +1,8 @@
 import {
   createExecutionContext,
-  env,
   waitOnExecutionContext,
 } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { createToken, updateToken } from "../src/tokens";
@@ -174,25 +174,54 @@ describe("auth failures (upstream never called)", () => {
 });
 
 describe("security invariant", () => {
-  it("never forwards the doppelganger token upstream", async () => {
+  it("never forwards the proxy token upstream in any slot (headers or URL)", async () => {
     await createToken(env.TOKENS, {
       label: "sec",
       providers: ["openai"],
-      token: "SECRET-DOPPEL",
+      token: "SECRET-TOKEN",
     });
+    // Dual-slot client: header auth plus a belt-and-braces ?key= in the URL.
     await call(
-      new Request("https://proxy.example/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: "Bearer SECRET-DOPPEL" },
-        body: "{}",
-      }),
+      new Request(
+        "https://proxy.example/v1/chat/completions?key=SECRET-TOKEN",
+        {
+          method: "POST",
+          headers: { authorization: "Bearer SECRET-TOKEN" },
+          body: "{}",
+        },
+      ),
     );
     const slots = [
+      captured!.url,
       captured!.headers.get("authorization"),
       captured!.headers.get("x-api-key"),
       captured!.headers.get("x-goog-api-key"),
     ].join("|");
-    expect(slots).not.toContain("SECRET-DOPPEL");
+    expect(slots).not.toContain("SECRET-TOKEN");
+  });
+});
+
+describe("token store outage", () => {
+  it("503s when KV rejects instead of surfacing an unhandled exception", async () => {
+    const broken = {
+      ...env,
+      TOKENS: {
+        get: () => Promise.reject(new Error("kv down")),
+      } as unknown as KVNamespace,
+    };
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://proxy.example/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: "Bearer whatever" },
+        body: "{}",
+      }),
+      broken,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503);
+    expect(captured).toBeNull();
   });
 });
 
@@ -330,5 +359,115 @@ describe("SSE passthrough", () => {
     const text = await res.text();
     expect(text).toContain("data: a");
     expect(text).toContain("[DONE]");
+  });
+});
+
+describe("CORS", () => {
+  it("answers the preflight OPTIONS without auth and never calls upstream", async () => {
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://app.example",
+          "access-control-request-headers": "x-api-key, content-type",
+        },
+      }),
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "https://app.example",
+    );
+    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(res.headers.get("access-control-allow-headers")).toBe(
+      "x-api-key, content-type",
+    );
+    expect(res.headers.get("access-control-max-age")).toBe("86400");
+    expect(captured).toBeNull();
+  });
+
+  it("reflects Origin and exposes the Gemini upload headers on a proxied response", async () => {
+    await seed("tk-cors", ["anthropic"]);
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-cors", origin: "https://app.example" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "https://app.example",
+    );
+    expect(res.headers.get("access-control-expose-headers")).toContain(
+      "x-goog-upload-url",
+    );
+  });
+
+  it("omits CORS headers when no Origin is sent (server-side callers)", async () => {
+    await seed("tk-nocors", ["anthropic"]);
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-nocors" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
+describe("rate limiting", () => {
+  const real = (env as { RATE_LIMITER?: unknown }).RATE_LIMITER;
+  afterEach(() => {
+    (env as { RATE_LIMITER?: unknown }).RATE_LIMITER = real;
+  });
+  const setLimiter = (
+    limit: (o: { key: string }) => Promise<{ success: boolean }>,
+  ) => {
+    (env as { RATE_LIMITER: unknown }).RATE_LIMITER = { limit };
+  };
+
+  it("429s with Retry-After when the limiter denies, without calling upstream", async () => {
+    await seed("tk-rl", ["anthropic"]);
+    setLimiter(async () => ({ success: false }));
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    expect(captured).toBeNull();
+  });
+
+  it("forwards when the limiter allows", async () => {
+    await seed("tk-rl-ok", ["anthropic"]);
+    setLimiter(async () => ({ success: true }));
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl-ok" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("fails open (forwards) when the limiter throws", async () => {
+    await seed("tk-rl-err", ["anthropic"]);
+    setLimiter(async () => {
+      throw new Error("limiter down");
+    });
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-rl-err" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
   });
 });
