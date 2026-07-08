@@ -1,6 +1,5 @@
 {
   "name": "api-proxy",
-  "module": "src/index.ts",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -32,13 +31,11 @@
     "genkit": "^1.39.0",
     "lefthook": "^2.1.9",
     "openai": "^6.45.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.10",
     "wrangler": "^4.108.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
-  },
-  "peerDependencies": {
-    "typescript": "^6.0.3"
   },
   "dependencies": {
     "hono": "^4.12.28"
