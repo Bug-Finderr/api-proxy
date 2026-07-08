@@ -21,6 +21,6 @@ if (meta.expiresAt) {
 }
 ```
 
-**Fail-closed on malformed input:** `NaN <= Date.now()` is `false`, which fails *open* (a garbage `expiresAt` stays valid) - so `Number.isNaN(t)` is checked explicitly. The past-expiry case returns a distinct sentinel so the proxy can answer `401 token expired` instead of the generic invalid-token message: expiry is the one failure a correctly-configured client will eventually hit, so it should self-diagnose. The admin form converts its local `datetime-local` value to UTC ISO in the browser; the route rejects unparseable or offset-less input at creation (an offset-less string would be read in the runtime's timezone, not the admin's).
+**Fail-closed on malformed input:** `NaN <= Date.now()` is `false`, which fails *open* (a garbage `expiresAt` stays valid) - so `Number.isNaN(t)` is checked explicitly. The past-expiry case returns a distinct sentinel so the proxy can answer `401 token expired` instead of the generic invalid-token message: expiry is the one failure a correctly-configured client will eventually hit, so it should self-diagnose. The admin form converts its local `datetime-local` value to UTC ISO in the browser; the route rejects unparseable or offset-less input at creation (an offset-less string would be read in the runtime's timezone, not the admin's). The dashboard localizes timestamps back for display, so the value reads back as typed.
 
 Related: [proxy-token-security.md](proxy-token-security.md).
