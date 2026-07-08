@@ -1,6 +1,6 @@
 // Upstream resolver + test seam. *_UPSTREAM env vars default to the real hosts, so
 // production is unchanged when unset; tests point them at a local mock.
-import type { Env, Provider } from "./types";
+import { coarse, type Env, type Provider } from "./types";
 
 const DEFAULTS = {
   openai: "https://api.openai.com",
@@ -9,7 +9,7 @@ const DEFAULTS = {
 } as const;
 
 export function upstreamBase(provider: Provider, env: Env): string {
-  switch (provider === "gemini-openai" ? "gemini" : provider) {
+  switch (coarse(provider)) {
     case "openai":
       return env.OPENAI_UPSTREAM || DEFAULTS.openai;
     case "anthropic":

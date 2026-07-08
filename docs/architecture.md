@@ -32,12 +32,14 @@ flowchart LR
 `handleProxy` is a thin wrapper: it answers an `OPTIONS` preflight directly, otherwise runs `proxyRequest` and reflects CORS headers onto the result (§8). `proxyRequest`:
 
 1. **Extract** the token from whichever auth slot it arrived in and **route** the provider from that slot (+ path); missing either → **401**. (§4)
-2. **Validate** `SHA-256(token)` against KV - a miss, a disabled token, or an expired one → **401**; a KV read failure (outage, exhausted quota) → **503**. (§6)
+2. **Validate** `SHA-256(token)` against KV - a miss or a disabled token → **401**; an expired one → **401 `token expired`** (distinct message, the most common self-inflicted failure); a KV read failure (outage, exhausted quota) → **503**. (§6)
 3. Requested provider not in the token's scope → **403**. (§4)
 4. **Rate-limit** on the hash - over the cap → **429** + `Retry-After` (fail-open). (§7)
-5. **Rewrite** the URL to the upstream - protocol/host/port only; strip `?key=` for every provider. (§13)
-6. **Swap auth** - strip every inbound auth header, set the one real key. (§5)
+5. **Rewrite** the URL to the upstream - protocol/host/port only. (§13)
+6. **Swap auth** - strip every inbound auth slot (the headers *and* `?key=`, one shared owner: `stripAuthSlots`), set the one real key. (§5)
 7. **Fetch** the upstream (OpenAI adds a geo-403 fallback, §9), stream the response back unbuffered, and stamp `lastUsed` fire-and-forget. (§6, §9)
+
+Steps 2-4 are one shared `authorize()` call - the same spine the WS path runs (§10), so a new check lands in both pipelines by construction. Infrastructure failures log their cause (`console.error`/`warn`) for §13's Workers Logs; auth rejections (401/403/429) deliberately do not - logging every stranger's bad token would let unauthenticated spam burn the log quota.
 
 ```mermaid
 flowchart TD
@@ -73,10 +75,10 @@ Auth slots are checked **before** `?key=`, so a request carrying `Authorization:
 
 ## 5. Auth swap (security linchpin)
 
-Before forwarding, `swapAuth` deletes **every** inbound auth header and sets exactly one with the real key:
+Before forwarding, `swapAuth` deletes **every** inbound auth slot and sets exactly one header with the real key:
 
 ```ts
-headers.delete("x-api-key"); headers.delete("x-goog-api-key"); headers.delete("authorization");
+stripAuthSlots(headers, url); // x-api-key, x-goog-api-key, authorization, ?key= - the one slot list
 switch (provider) {
   case "openai": case "gemini-openai": headers.set("authorization", `Bearer ${realKey}`); break;
   case "anthropic":                    headers.set("x-api-key", realKey);                  break;
@@ -84,7 +86,7 @@ switch (provider) {
 }
 ```
 
-Strip-all-then-set-one guarantees the proxy token is never forwarded upstream even if a client sends it in an unexpected slot, and closes dual-slot leaks: the `?key=` query slot is deleted for every provider too, not just Gemini. A test asserts the token never appears in any outbound auth header or in the outbound URL. See [`proxy-token-security.md`](learnings/proxy-token-security.md).
+Strip-all-then-set-one guarantees the proxy token is never forwarded upstream even if a client sends it in an unexpected slot, and closes dual-slot leaks: the `?key=` query slot is deleted for every provider too, not just Gemini. `stripAuthSlots` is the single owner of the slot list, shared with the WS path (§10) - a new auth slot is added in exactly one place. A test scans **every** outbound header entry plus the URL and asserts the token appears nowhere. See [`proxy-token-security.md`](learnings/proxy-token-security.md).
 
 ## 6. Token model & lifecycle
 
@@ -131,7 +133,7 @@ namespace_id = "1001"
   period = 60        # must be 10 or 60
 ```
 
-It is in-process (not a subrequest), keyed on the hash, and **per-colo + eventually consistent** - a loose ceiling for abuse protection, not a strict quota. Verified to run on the Free plan. See [`rate-limit-binding-free-and-loose.md`](learnings/rate-limit-binding-free-and-loose.md).
+It is in-process (not a subrequest), keyed on the hash, and **per-colo + eventually consistent** - a loose ceiling for abuse protection, not a strict quota. Verified to run on the Free plan. `/admin/login` throttling is a separate, tighter `LOGIN_LIMITER` ruleset (§11, §13), so tuning the proxy ceiling never loosens brute-force protection. See [`rate-limit-binding-free-and-loose.md`](learnings/rate-limit-binding-free-and-loose.md).
 
 ## 8. CORS & browser support
 
@@ -192,17 +194,18 @@ sequenceDiagram
 | `Sec-WebSocket-Protocol: openai-insecure-api-key.<token>` | openai | key entry dropped; real key set as `Authorization: Bearer` (the worker *can* set headers); `realtime` + org/project/beta subprotocols kept |
 | `?key=<token>` | gemini | `?key=<real>` in the query (Gemini Live reads the key there, not a header) |
 
-`prepareWsUpstream` strips every inbound auth slot then sets exactly one - the WS analogue of `swapAuth` (§5) - so the proxy token never reaches the upstream in any slot (header, query, or subprotocol); a test asserts this. The OpenAI **geo-403 fallback (§9) applies here too**: a 403 from a bad colo re-issues the upgrade through the `UsEgress` DO, which carries a WebSocket like a plain `fetch`.
+The upgrade runs the same shared `authorize()` spine as HTTP (§3), and `prepareWsUpstream` strips every inbound auth slot via the shared `stripAuthSlots` (§5) then sets exactly one in the shape this provider's WS API expects - so the proxy token never reaches the upstream in any slot (header, query, or subprotocol); a test asserts this. The OpenAI **geo-403 fallback (§9) applies here too**: a 403 from a bad colo re-issues the upgrade through the `UsEgress` DO, which carries a WebSocket like a plain `fetch`.
 
 Caveats: the rate limit gates the **connection**, not each frame (one upgrade = one hit); a revoke takes effect on the next connection, not mid-stream (a long-lived socket is validated once, at upgrade time); and Cloudflare closes an idle socket after a quiet period, so a silent client should keep-alive. See [`websocket-proxy-auth-slots.md`](learnings/websocket-proxy-auth-slots.md).
 
 ## 11. Admin dashboard
 
-Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus **HTMX 2.x** loaded from a CDN (no authored client JS beyond two inline `hx-on` attributes; nothing in the worker bundle but markup + attributes).
+Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus **HTMX 2.x** loaded from a CDN with a pinned version **and an SRI hash** (`integrity` + `crossorigin`): the page holds token-mint power and receives `ADMIN_SECRET`, so a tampered CDN response must refuse to execute. No authored client JS beyond a handful of inline `hx-on` attributes and the copy-button `onclick`; nothing in the worker bundle but markup + attributes. The login form also carries `method="post"` so a no-htmx fallback submit can never default to GET and leak the password into the URL.
 
-- **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` sets an HMAC-SHA256-signed cookie `cm_admin=<ts>.<sig>` (`Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`.
-- **CRUD:** HTMX-driven over `/admin/api/tokens` - list (`GET`), create (`POST`; parses label, provider checkboxes, an optional `datetime-local` expiry the form converts to UTC ISO in the browser, custom-or-generated token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex.
-- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created plaintext is shown once; expired tokens render `expired` and dim the row. The list refreshes on load, on the `tokens-changed` event, and **every 120 s while the tab is visible** - each refresh costs a `kv.list`, and the free tier's 1,000 lists/day (account-wide) rules out tighter polling.
+- **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` is rate-limited per client IP (dedicated `LOGIN_LIMITER`, 10/60s, fail-open) and compared in constant time (`crypto.subtle.timingSafeEqual` over SHA-256 digests); failures are logged. Success sets an HMAC-SHA256-signed cookie `cm_admin=<ts>.<sig>` (`Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`, and tampered/expired cookies are pinned by negative-path tests.
+- **CRUD:** HTMX-driven over `/admin/api/tokens` - list (`GET`), create (`POST`; parses label, provider checkboxes, an optional `datetime-local` expiry the form converts to UTC ISO in the browser, custom-or-generated token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex. Guards: no providers → 400 (no silent openai default), custom tokens need ≥ 12 chars, creating over an existing hash → 409 (an overwrite could resurrect a disabled token), and `status` is whitelisted (a malformed value must not re-enable a token).
+- **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created plaintext is shown once with a **copy button and the per-provider base URLs** ready to hand out; expired tokens render `expired` and dim the row. The list refreshes on load, on the `tokens-changed` event, and **every 120 s while the tab is visible** - each refresh costs a `kv.list`, and the free tier's 1,000 lists/day (account-wide) rules out tighter polling.
+- **Errors surface:** a body-level `hx-on::response-error` writes failures into a flash div (htmx swaps nothing on non-2xx by default - previously a wrong password or an expired session silently no-opped), and a 401 mid-session bounces back to the login page.
 
 ## 12. Real key handling
 
@@ -214,9 +217,12 @@ Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `
 |---|---|---|
 | `TOKENS` | KV namespace | token store (by `SHA-256`) + `:lu` last-used keys |
 | `US_EGRESS` | SQLite Durable Object (`UsEgress`) | NA-pinned egress fallback for OpenAI (HTTP + wss) |
-| `RATE_LIMITER` | Rate Limit | per-token RPM ceiling |
+| `RATE_LIMITER` | Rate Limit | per-token RPM ceiling (100/60s) |
+| `LOGIN_LIMITER` | Rate Limit | per-IP `/admin/login` throttle (10/60s, separate ruleset) |
 
 Plus `[[migrations]] tag="v1" new_sqlite_classes=["UsEgress"]`. Upstreams resolve through `upstreamBase()`: the `*_UPSTREAM` env vars (plain vars, not secrets) default to the real hosts and are overridden only by tests pointing at a mock; `rewriteToUpstream` rewrites just protocol/host/port.
+
+`[observability] enabled = true` persists `console.*` to Workers Logs (free plan: 200k events/day, 3-day retention - never a charge). The infrastructure failure paths log their cause - KV outage, upstream fetch failure, geo-403 fallback firing, admin route errors, failed logins, failed `lastUsed` stamps - so a 2am incident is diagnosable from the dashboard, not just a live `wrangler tail`. Deliberately unlogged: auth rejections (flood-safe, see §3) and the fail-open rate-limiter catch (a missing binding would warn on every request in dev).
 
 ## 14. Testing (two tiers)
 

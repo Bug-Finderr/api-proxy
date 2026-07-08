@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { createToken, deleteToken, listTokens, updateToken } from "../tokens";
+import {
+  createToken,
+  deleteToken,
+  listTokens,
+  sha256hex,
+  updateToken,
+} from "../tokens";
 import type { CoarseProvider, Env } from "../types";
 import {
   createdNotice,
@@ -68,6 +74,17 @@ async function makeCookie(secret: string): Promise<string> {
 
 const isHash = (h: string) => /^[0-9a-f]{64}$/.test(h);
 
+/** Constant-time secret comparison: hash both to a fixed length, then timingSafeEqual
+ *  (a Workers extension to SubtleCrypto), so neither length nor prefix leaks via timing. */
+async function secretsEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [da, db] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(da, db);
+}
+
 const VALID_PROVIDERS: CoarseProvider[] = ["openai", "anthropic", "gemini"];
 const parseProviders = (fd: FormData): CoarseProvider[] =>
   fd
@@ -79,11 +96,27 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
 
-// Login is the only unguarded route (registered before the auth guard).
+// Login is the only unguarded route (registered before the auth guard). Throttled per client
+// IP through a dedicated low-rate limiter (fail-open, like the proxy's) and compared in
+// constant time: an internet-facing password prompt must not be a brute-force or timing oracle.
 app.post("/login", async (c) => {
+  let allowed = true;
+  try {
+    const ip = c.req.header("cf-connecting-ip") || "unknown";
+    allowed = (await c.env.LOGIN_LIMITER.limit({ key: `login:${ip}` })).success;
+  } catch {
+    allowed = true;
+  }
+  if (!allowed)
+    return c.text("too many login attempts", 429, { "retry-after": "60" });
   const body = await c.req.parseBody();
-  if (!c.env.ADMIN_SECRET || body.password !== c.env.ADMIN_SECRET)
+  const ok =
+    !!c.env.ADMIN_SECRET &&
+    (await secretsEqual(String(body.password || ""), c.env.ADMIN_SECRET));
+  if (!ok) {
+    console.warn("admin login failed");
     return c.text("invalid password", 401);
+  }
   return c.body("ok", 200, {
     "Set-Cookie": await makeCookie(c.env.ADMIN_SECRET),
     "HX-Redirect": "/admin",
@@ -113,7 +146,17 @@ app.get("/api/tokens", async (c) =>
 app.post("/api/tokens", async (c) => {
   const fd = await c.req.formData();
   const providers = parseProviders(fd);
-  const custom = fd.get("token");
+  // Silent scope substitution is the wrong default for a security control: no boxes, no token.
+  if (!providers.length) return c.text("pick at least one provider", 400);
+  const custom = String(fd.get("token") || "").trim();
+  if (custom) {
+    // The token is the only secret between the internet and the real keys: no weak custom
+    // tokens, and no silent overwrite (overwriting could resurrect a disabled token).
+    if (custom.length < 12)
+      return c.text("custom token too short (min 12 chars)", 400);
+    if (await c.env.TOKENS.get(await sha256hex(custom)))
+      return c.text("token already exists - delete it first", 409);
+  }
   const rawExp = String(fd.get("expiresAt") || "").trim();
   let expiresAt: string | undefined;
   if (rawExp) {
@@ -126,11 +169,15 @@ app.post("/api/tokens", async (c) => {
   }
   const { token } = await createToken(c.env.TOKENS, {
     label: String(fd.get("label") || ""),
-    providers: providers.length ? providers : ["openai"],
-    token: custom ? String(custom) : undefined,
+    providers,
+    token: custom || undefined,
     expiresAt,
   });
-  return c.html(createdNotice(token), 200, { "HX-Trigger": "tokens-changed" });
+  return c.html(
+    createdNotice(token, providers, new URL(c.req.url).origin),
+    200,
+    { "HX-Trigger": "tokens-changed" },
+  );
 });
 
 app.put("/api/tokens/:hash", async (c) => {
@@ -143,9 +190,12 @@ app.put("/api/tokens/:hash", async (c) => {
     providers: CoarseProvider[];
   }> = {};
   if (fd.has("label")) patch.label = String(fd.get("label"));
-  if (fd.has("status"))
-    patch.status =
-      String(fd.get("status")) === "disabled" ? "disabled" : "active";
+  if (fd.has("status")) {
+    const s = String(fd.get("status"));
+    // Whitelist, don't default: a malformed value must not silently re-enable a token.
+    if (s !== "active" && s !== "disabled") return c.text("bad status", 400);
+    patch.status = s;
+  }
   if (fd.has("providers")) patch.providers = parseProviders(fd);
   const meta = await updateToken(c.env.TOKENS, hash, patch);
   if (!meta) return c.text("not found", 404);

@@ -123,6 +123,36 @@ describe("WebSocket proxy (end-to-end)", () => {
     expect(hs!.headers.authorization).toBeUndefined();
   });
 
+  it("preserves binary frames byte-for-byte through the pipe", async () => {
+    mock.reset();
+    // Pins byte-for-byte binary transit. At the current compatibility_date the workerd default
+    // is already arraybuffer; once the date passes 2026-03-17 (websocket_standard_binary_type
+    // flips the default to Blob) the explicit binaryType pin in ws.ts becomes load-bearing and
+    // this test is what catches its removal.
+    const payload = Uint8Array.from([0, 1, 2, 127, 128, 250, 255, 42]);
+    const echoed = await new Promise<Buffer>((resolve, reject) => {
+      const c = new WebSocket(`${wsBase}/v1/responses`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const timer = setTimeout(() => {
+        c.terminate();
+        reject(new Error("binary round-trip timed out"));
+      }, 15_000);
+      c.on("open", () => c.send(payload));
+      c.on("message", (data, isBinary) => {
+        clearTimeout(timer);
+        c.close();
+        if (isBinary) resolve(data as Buffer);
+        else reject(new Error("frame came back as text"));
+      });
+      c.on("error", (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+    expect(Buffer.from(echoed).equals(Buffer.from(payload))).toBe(true);
+  });
+
   it("rejects an unknown token at the handshake (upstream never opened)", async () => {
     mock.reset();
     await expect(

@@ -62,25 +62,27 @@ function parseMeta(raw: string | null): TokenMetadata | null {
   }
 }
 
-/** Resolve a token hash to its metadata, only if it exists and is active. */
+/** Resolve a token hash to its metadata, only if it exists and is active.
+ *  Returns the "expired" sentinel for a past expiry so callers can answer distinctly. */
 export async function getValidatedByHash(
   kv: KVNamespace,
   hash: string,
-): Promise<TokenMetadata | null> {
+): Promise<TokenMetadata | "expired" | null> {
   const meta = parseMeta(await kv.get(hash));
   if (meta?.status !== "active") return null;
   if (meta.expiresAt) {
     const t = Date.parse(meta.expiresAt);
-    if (Number.isNaN(t) || t <= Date.now()) return null; // fail-closed on bad/past
+    if (Number.isNaN(t)) return null; // fail-closed on malformed
+    if (t <= Date.now()) return "expired";
   }
   return meta;
 }
 
-/** Resolve a plaintext token to its metadata, only if it exists and is active. */
+/** Plaintext-token variant of getValidatedByHash (test convenience). */
 export async function getValidated(
   kv: KVNamespace,
   token: string,
-): Promise<TokenMetadata | null> {
+): Promise<TokenMetadata | "expired" | null> {
   return getValidatedByHash(kv, await sha256hex(token));
 }
 
@@ -140,8 +142,9 @@ export async function touchLastUsed(
   try {
     // Write only the side key; never touch the token record (avoids resurrecting a revoke).
     await kv.put(luKey(hash), now);
-  } catch {
+  } catch (err) {
     // Release the claim so a later request retries today; rejected puts burn no quota.
     luStampedDay.delete(hash);
+    console.warn("lastUsed stamp failed", err);
   }
 }

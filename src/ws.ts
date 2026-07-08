@@ -5,15 +5,16 @@
 // WebSocket cannot set headers - the `Sec-WebSocket-Protocol` subprotocol.
 
 import {
-  coarse,
+  authorize,
   egressStub,
   extractToken,
   isGeoBlock,
   realKeyFor,
   routeProvider,
+  stripAuthSlots,
 } from "./proxy";
-import { getValidatedByHash, sha256hex, touchLastUsed } from "./tokens";
-import type { Env, Provider, TokenMetadata } from "./types";
+import { touchLastUsed } from "./tokens";
+import { coarse, type Env, type Provider } from "./types";
 import { rewriteToUpstream } from "./upstreams";
 
 // OpenAI browser clients smuggle the key as a Sec-WebSocket-Protocol entry, since a browser
@@ -70,10 +71,9 @@ export function prepareWsUpstream(
   rewriteToUpstream(url, provider, env);
 
   const headers = new Headers(req.headers);
-  // Strip every inbound auth slot, then set exactly one upstream (the WS analogue of swapAuth).
-  headers.delete("x-api-key");
-  headers.delete("x-goog-api-key");
-  headers.delete("authorization");
+  // Strip every inbound auth slot (same owner as the HTTP path), then set exactly one
+  // upstream slot in the shape this provider's WS API expects.
+  stripAuthSlots(headers, url);
   // The handshake headers are runtime-owned; drop the client's so CF regenerates them for the
   // upstream leg, and signal upgrade intent explicitly.
   headers.delete("sec-websocket-key");
@@ -83,10 +83,10 @@ export function prepareWsUpstream(
 
   if (provider === "gemini") {
     url.searchParams.set("key", realKey); // Gemini Live takes the key in the query
+  } else if (provider === "anthropic") {
+    headers.set("x-api-key", realKey);
   } else {
-    url.searchParams.delete("key");
-    if (provider === "anthropic") headers.set("x-api-key", realKey);
-    else headers.set("authorization", `Bearer ${realKey}`); // openai + gemini-openai
+    headers.set("authorization", `Bearer ${realKey}`); // openai + gemini-openai
   }
 
   // Drop the smuggled key entry from the subprotocol offer, keep the rest (realtime, org,
@@ -145,30 +145,13 @@ export async function handleWsProxy(
   if (!token || !provider)
     return new Response("missing token", { status: 401 });
 
-  const hash = await sha256hex(token);
-  let meta: TokenMetadata | null;
-  try {
-    meta = await getValidatedByHash(env.TOKENS, hash);
-  } catch {
-    // KV outage / exhausted read quota: a controlled 503, not an unhandled 1101.
-    return new Response("token store unavailable", { status: 503 });
-  }
-  if (!meta) return new Response("invalid or revoked token", { status: 401 });
-  if (!meta.providers.includes(coarse(provider)))
-    return new Response("token not allowed for provider", { status: 403 });
-
-  // Per-token rate limit, same fail-open binding as the HTTP path. Gates the connection, not each
+  // Shared validate -> scope -> rate-limit spine. The limiter gates the connection, not each
   // frame: one upgrade = one limiter hit.
-  let allowed = true;
-  try {
-    allowed = (await env.RATE_LIMITER.limit({ key: hash })).success;
-  } catch {
-    allowed = true;
-  }
-  if (!allowed)
-    return new Response("rate limit exceeded", {
-      status: 429,
-      headers: { "retry-after": "60" },
+  const auth = await authorize(env, token, provider);
+  if ("status" in auth)
+    return new Response(auth.message, {
+      status: auth.status,
+      headers: auth.status === 429 ? { "retry-after": "60" } : undefined,
     });
 
   const realKey = realKeyFor(provider, env);
@@ -185,11 +168,16 @@ export async function handleWsProxy(
     upstreamRes = await fetch(target, { headers });
     // Same OpenAI geo-403 escape hatch as HTTP: a 403 from a bad colo is retried from the
     // NA-pinned egress DO, which carries the WS upgrade just like a plain fetch.
-    if (coarse(provider) === "openai" && (await isGeoBlock(upstreamRes)))
+    if (coarse(provider) === "openai" && (await isGeoBlock(upstreamRes))) {
+      console.warn(
+        "openai geo-403 on ws upgrade; retrying via the NA egress DO",
+      );
       upstreamRes = await egressStub(env).fetch(
         new Request(target, { headers }),
       );
-  } catch {
+    }
+  } catch (err) {
+    console.error("ws upstream connect failed", err);
     return new Response("upstream connect failed", { status: 502 });
   }
 
@@ -213,7 +201,7 @@ export async function handleWsProxy(
   pump(server, upstream);
   pump(upstream, server);
 
-  ctx.waitUntil(touchLastUsed(env.TOKENS, hash));
+  ctx.waitUntil(touchLastUsed(env.TOKENS, auth.hash));
 
   const res = new Response(null, { status: 101, webSocket: client });
   // Echo the subprotocol the upstream actually chose (e.g. "realtime"); a browser handshake

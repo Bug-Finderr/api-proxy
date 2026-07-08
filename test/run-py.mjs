@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import http from "node:http";
 import { dirname, join } from "node:path";
@@ -30,7 +31,7 @@ const FAKE = {
   gemini: "FAKE-GEMINI-KEY",
 };
 const ADMIN_SECRET = "compat-admin-secret";
-const TOKEN = "tk-py";
+const TOKEN = "tk-py-compat-1";
 const PER_FILE_TIMEOUT_MS = 90_000;
 
 // --- mock upstream (mirrors test/sdk-compat/setup.ts, plus control endpoints) ---
@@ -179,6 +180,13 @@ async function seedToken(workerUrl) {
   if (login.status !== 200)
     throw new Error(`admin login failed: ${login.status}`);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+  // Local dev KV persists across runs; creation 409s on an existing hash (overwrite guard),
+  // so delete any stale record first to keep the seed idempotent.
+  const hash = createHash("sha256").update(TOKEN).digest("hex");
+  await fetch(`${workerUrl}/admin/api/tokens/${hash}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
   const form = new URLSearchParams({ label: TOKEN, token: TOKEN });
   for (const p of ["openai", "anthropic", "gemini"])
     form.append("providers", p);

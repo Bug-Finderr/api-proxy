@@ -27,6 +27,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 
+# local experiments / scratch
+.tmp-*
+
 # wrangler local state / build cache
 .wrangler
 

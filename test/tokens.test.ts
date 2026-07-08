@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createToken,
   deleteToken,
@@ -37,10 +37,11 @@ describe("createToken + getValidated", () => {
     });
     expect(token).toMatch(/^ptk_/);
     expect(meta.last4).toBe(token.slice(-4));
-    const got = await getValidated(env.TOKENS, token);
-    expect(got?.label).toBe("alice");
-    expect(got?.providers).toEqual(["openai"]);
-    expect(got?.status).toBe("active");
+    expect(await getValidated(env.TOKENS, token)).toMatchObject({
+      label: "alice",
+      providers: ["openai"],
+      status: "active",
+    });
   });
   it("accepts a custom admin-typed token", async () => {
     const { token } = await createToken(env.TOKENS, {
@@ -49,7 +50,9 @@ describe("createToken + getValidated", () => {
       token: "my-code",
     });
     expect(token).toBe("my-code");
-    expect((await getValidated(env.TOKENS, "my-code"))?.label).toBe("bob");
+    expect(await getValidated(env.TOKENS, "my-code")).toMatchObject({
+      label: "bob",
+    });
   });
   it("returns null for an unknown token", async () => {
     expect(await getValidated(env.TOKENS, "nope-unknown")).toBeNull();
@@ -107,6 +110,11 @@ describe("listTokens / updateToken / deleteToken", () => {
 });
 
 describe("touchLastUsed", () => {
+  // Pin the clock mid-day UTC: the day-memo tests would otherwise flake if the suite
+  // happens to straddle a UTC midnight between two touches.
+  beforeAll(() => vi.setSystemTime(new Date("2026-07-08T12:00:00Z")));
+  afterAll(() => vi.useRealTimers());
+
   it("sets lastUsed without clobbering other fields", async () => {
     const { hash } = await createToken(env.TOKENS, {
       label: "tu",
@@ -179,12 +187,12 @@ describe("expiry (getValidatedByHash via getValidated)", () => {
     );
     expect(await getValidated(env.TOKENS, token)).not.toBeNull();
   });
-  it("past expiresAt is rejected", async () => {
+  it("past expiresAt returns the expired sentinel (distinct 401 for callers)", async () => {
     const { token } = await mk(
       "exp-past",
       new Date(Date.now() - 1000).toISOString(),
     );
-    expect(await getValidated(env.TOKENS, token)).toBeNull();
+    expect(await getValidated(env.TOKENS, token)).toBe("expired");
   });
   it("malformed expiresAt is rejected (fail-closed)", async () => {
     const { token } = await mk("exp-bad", "not-a-date");

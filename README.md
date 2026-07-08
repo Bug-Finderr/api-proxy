@@ -70,7 +70,7 @@ Optional plain vars (NOT secrets) override the upstreams; they default to the re
 
 ## Admin dashboard
 
-Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token or generate one. The token is shown **once** at creation - copy it then; only its SHA-256 hash is stored. Disable or delete any token at any time.
+Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token (min 12 chars; an existing token is never silently overwritten) or generate one. The token is shown **once** at creation - with a copy button and the base URL(s) to hand out alongside it; only its SHA-256 hash is stored. Disable or delete any token at any time.
 
 ## Per-token controls
 
