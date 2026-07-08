@@ -13,13 +13,14 @@ import {
 let mock: MockUpstream;
 let worker: Unstable_DevWorker;
 let url: string;
+const TOKEN = "tk-fetch-compat";
 
 beforeAll(async () => {
   mock = await startMockUpstream();
   const w = await startWorker(mock.url);
   worker = w.worker;
   url = w.url;
-  await seedToken(url, { token: "tk-fetch", providers: ["gemini"] });
+  await seedToken(url, { token: TOKEN, providers: ["gemini"] });
 });
 afterAll(async () => {
   await worker.stop();
@@ -33,7 +34,7 @@ describe("raw fetch (no SDK)", () => {
       contents: [{ parts: [{ text: "ping-verbatim-42" }] }],
     });
     const res = await fetch(
-      `${url}/v1beta/models/gemini-x:generateContent?key=tk-fetch&foo=bar`,
+      `${url}/v1beta/models/gemini-x:generateContent?key=${TOKEN}&foo=bar`,
       { method: "POST", headers: { "content-type": "application/json" }, body },
     );
     expect(res.status).toBe(200);
@@ -43,11 +44,11 @@ describe("raw fetch (no SDK)", () => {
     // real key swapped into the header slot
     expect(cap?.headers["x-goog-api-key"]).toBe(FAKE.gemini);
     // the ?key= token is stripped from the forwarded query; other params survive
-    expect(cap?.path).not.toContain("tk-fetch");
+    expect(cap?.path).not.toContain(TOKEN);
     expect(cap?.path).not.toContain("key=");
     expect(cap?.path).toContain("foo=bar");
     // the token never appears in any outbound header
-    expect(JSON.stringify(cap?.headers)).not.toContain("tk-fetch");
+    expect(JSON.stringify(cap?.headers)).not.toContain(TOKEN);
     // request body forwarded byte-for-byte
     expect(cap?.body).toBe(body);
   });

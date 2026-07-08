@@ -1,8 +1,10 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
-// Tier 1: proxy logic, run inside workerd via the cloudflareTest plugin (pool-workers 0.16.x).
+// Tier 1: proxy logic, run inside workerd via the cloudflareTest plugin.
 // Mocks outbound fetch; seeds KV directly. The fake bindings stand in for real keys/secrets.
+// No rate-limit bindings here (RATE_LIMITER / LOGIN_LIMITER): limiter tests inject a fake via
+// env spread; requests without one exercise the documented fail-open path.
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],

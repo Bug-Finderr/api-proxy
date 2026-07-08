@@ -5,7 +5,7 @@ import {
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { createToken, updateToken } from "../src/tokens";
+import { createToken, sha256hex, updateToken } from "../src/tokens";
 
 let captured: Request | null;
 let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -40,7 +40,7 @@ const seed = (
 
 describe("proxy routing + key swap", () => {
   it("forwards a valid OpenAI request with the real key swapped in", async () => {
-    await seed("tk-oai", ["openai"]);
+    const { hash } = await seed("tk-oai", ["openai"]);
     const res = await call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
@@ -55,6 +55,23 @@ describe("proxy routing + key swap", () => {
     const u = new URL(captured!.url);
     expect(u.hostname).toBe("api.openai.com");
     expect(u.pathname).toBe("/v1/chat/completions");
+    expect(captured!.headers.get("authorization")).toBe(
+      "Bearer real-openai-key-FAKE",
+    );
+    // waitOnExecutionContext already flushed waitUntil: the lastUsed stamp must have landed.
+    expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
+  });
+
+  it("forwards a GET (no body) with the key swapped", async () => {
+    await seed("tk-get", ["openai"]);
+    const res = await call(
+      new Request("https://proxy.example/v1/models", {
+        headers: { authorization: "Bearer tk-get" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(captured!.method).toBe("GET");
+    expect(new URL(captured!.url).pathname).toBe("/v1/models");
     expect(captured!.headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
@@ -171,6 +188,24 @@ describe("auth failures (upstream never called)", () => {
     expect(res.status).toBe(403);
     expect(captured).toBeNull();
   });
+  it("401 with a distinct message for an expired token", async () => {
+    await createToken(env.TOKENS, {
+      label: "exp",
+      providers: ["openai"],
+      token: "tk-expired",
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    const res = await call(
+      new Request("https://proxy.example/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: "Bearer tk-expired" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.text()).toContain("token expired");
+    expect(captured).toBeNull();
+  });
 });
 
 describe("security invariant", () => {
@@ -191,13 +226,26 @@ describe("security invariant", () => {
         },
       ),
     );
-    const slots = [
-      captured!.url,
-      captured!.headers.get("authorization"),
-      captured!.headers.get("x-api-key"),
-      captured!.headers.get("x-goog-api-key"),
-    ].join("|");
+    // Scan the ENTIRE outbound surface (every header entry + the URL), not just known slots.
+    const slots = [captured!.url, ...[...captured!.headers].flat()].join("|");
     expect(slots).not.toContain("SECRET-TOKEN");
+  });
+});
+
+describe("upstream failure", () => {
+  it("502s when the upstream fetch throws", async () => {
+    await seed("tk-502", ["anthropic"]);
+    fetchSpy.mockImplementation(async () => {
+      throw new Error("connection reset");
+    });
+    const res = await call(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": "tk-502" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(502);
   });
 });
 
@@ -443,9 +491,13 @@ describe("rate limiting", () => {
     expect(captured).toBeNull();
   });
 
-  it("forwards when the limiter allows", async () => {
+  it("forwards when the limiter allows, keyed on the token hash", async () => {
     await seed("tk-rl-ok", ["anthropic"]);
-    setLimiter(async () => ({ success: true }));
+    let seenKey = "";
+    setLimiter(async ({ key }) => {
+      seenKey = key;
+      return { success: true };
+    });
     const res = await call(
       new Request("https://proxy.example/v1/messages", {
         method: "POST",
@@ -454,6 +506,7 @@ describe("rate limiting", () => {
       }),
     );
     expect(res.status).toBe(200);
+    expect(seenKey).toBe(await sha256hex("tk-rl-ok"));
   });
 
   it("fails open (forwards) when the limiter throws", async () => {

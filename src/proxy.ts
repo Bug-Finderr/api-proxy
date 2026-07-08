@@ -2,7 +2,7 @@
 // MUST NOT import Hono or any admin code.
 
 import { getValidatedByHash, sha256hex, touchLastUsed } from "./tokens";
-import type { CoarseProvider, Env, Provider, TokenMetadata } from "./types";
+import { coarse, type Env, type Provider, type TokenMetadata } from "./types";
 import { rewriteToUpstream } from "./upstreams";
 
 /** Pull the candidate token from whichever auth slot the SDK used. */
@@ -35,20 +35,23 @@ export function routeProvider(req: Request, url: URL): Provider | null {
   return null;
 }
 
-/** Collapse gemini-openai onto the gemini scope used by token.providers. */
-export function coarse(provider: Provider): CoarseProvider {
-  return provider === "gemini-openai" ? "gemini" : provider;
-}
-
-/** Strip every inbound auth header, then set exactly one with the real key. Security linchpin. */
-export function swapAuth(
-  headers: Headers,
-  provider: Provider,
-  realKey: string,
-): void {
+/** Delete every inbound auth slot: the three headers extractToken reads plus the ?key= query
+ *  param. Single owner of the slot list - extend here when a new slot is ever added. */
+export function stripAuthSlots(headers: Headers, url: URL): void {
   headers.delete("x-api-key");
   headers.delete("x-goog-api-key");
   headers.delete("authorization");
+  url.searchParams.delete("key");
+}
+
+/** Strip every inbound auth slot, then set exactly one header with the real key. Security linchpin. */
+export function swapAuth(
+  headers: Headers,
+  url: URL,
+  provider: Provider,
+  realKey: string,
+): void {
+  stripAuthSlots(headers, url);
   switch (provider) {
     case "openai":
     case "gemini-openai":
@@ -80,6 +83,42 @@ function errorResponse(status: number, error: string): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/** The validate -> scope -> rate-limit spine shared by the HTTP and WS pipelines.
+ *  Returns the hash + metadata on success, or the status + message the caller should answer. */
+export async function authorize(
+  env: Env,
+  token: string,
+  provider: Provider,
+): Promise<
+  { hash: string; meta: TokenMetadata } | { status: number; message: string }
+> {
+  const hash = await sha256hex(token);
+  let meta: TokenMetadata | "expired" | null;
+  try {
+    meta = await getValidatedByHash(env.TOKENS, hash);
+  } catch (err) {
+    // KV outage / exhausted read quota: a controlled 503, not an unhandled 1101.
+    console.error("token store read failed", err);
+    return { status: 503, message: "token store unavailable" };
+  }
+  if (meta === "expired") return { status: 401, message: "token expired" };
+  if (!meta) return { status: 401, message: "invalid or revoked token" };
+  if (!meta.providers.includes(coarse(provider)))
+    return { status: 403, message: "token not allowed for provider" };
+
+  // Per-token rate limit, keyed on the hash (in-process binding, not a subrequest).
+  // Fail-open: a missing or erroring limiter must never brick the proxy. The binding
+  // counts per-colo, so it is a loose ceiling, not strict abuse prevention.
+  let allowed = true;
+  try {
+    allowed = (await env.RATE_LIMITER.limit({ key: hash })).success;
+  } catch {
+    allowed = true;
+  }
+  if (!allowed) return { status: 429, message: "rate limit exceeded" };
+  return { hash, meta };
 }
 
 const EGRESS_POOL = 8;
@@ -158,41 +197,19 @@ async function proxyRequest(
   const provider = routeProvider(req, url);
   if (!token || !provider) return errorResponse(401, "missing token");
 
-  const hash = await sha256hex(token);
-  let meta: TokenMetadata | null;
-  try {
-    meta = await getValidatedByHash(env.TOKENS, hash);
-  } catch {
-    // KV outage / exhausted read quota: a controlled 503, not an unhandled 1101.
-    return errorResponse(503, "token store unavailable");
-  }
-  if (!meta) return errorResponse(401, "invalid or revoked token");
-  if (!meta.providers.includes(coarse(provider)))
-    return errorResponse(403, "token not allowed for provider");
-
-  // Per-token rate limit, keyed on the hash (in-process binding, not a subrequest).
-  // Fail-open: a missing or erroring limiter must never brick the proxy. The binding
-  // counts per-colo, so it is a loose ceiling, not strict abuse prevention.
-  let allowed = true;
-  try {
-    allowed = (await env.RATE_LIMITER.limit({ key: hash })).success;
-  } catch {
-    allowed = true;
-  }
-  if (!allowed) {
-    const res = errorResponse(429, "rate limit exceeded");
-    res.headers.set("retry-after", "60");
+  const auth = await authorize(env, token, provider);
+  if ("status" in auth) {
+    const res = errorResponse(auth.status, auth.message);
+    if (auth.status === 429) res.headers.set("retry-after", "60");
     return res;
   }
 
   const realKey = realKeyFor(provider, env);
   rewriteToUpstream(url, provider, env);
-  // Strip the query auth slot for every provider (the URL analogue of swapAuth): a dual-slot
-  // client that also sends ?key= must not leak the proxy token into upstream request logs.
-  url.searchParams.delete("key");
-
   const headers = new Headers(req.headers);
-  swapAuth(headers, provider, realKey);
+  // swapAuth also strips ?key= for every provider (the URL analogue of the header slots):
+  // a dual-slot client must not leak the proxy token into upstream request logs.
+  swapAuth(headers, url, provider, realKey);
   const target = url.toString();
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
 
@@ -207,6 +224,7 @@ async function proxyRequest(
         new Request(target, { method: req.method, headers, body }),
       );
       if (await isGeoBlock(upstream)) {
+        console.warn("openai geo-403; retrying via the NA egress DO");
         upstream = await egressStub(env).fetch(
           new Request(target, { method: req.method, headers, body }),
         );
@@ -216,10 +234,11 @@ async function proxyRequest(
         new Request(target, { method: req.method, headers, body: req.body }),
       );
     }
-  } catch {
+  } catch (err) {
+    console.error("upstream fetch failed", err);
     return errorResponse(502, "upstream request failed");
   }
 
-  ctx.waitUntil(touchLastUsed(env.TOKENS, hash));
+  ctx.waitUntil(touchLastUsed(env.TOKENS, auth.hash));
   return new Response(upstream.body, upstream);
 }

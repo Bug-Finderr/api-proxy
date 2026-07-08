@@ -239,6 +239,30 @@ describe("handleWsProxy: auth swap + upgrade", () => {
   });
 });
 
+describe("handleWsProxy: subprotocol echo", () => {
+  it("echoes the subprotocol the upstream negotiated back to the client", async () => {
+    await seed("tk-echo", ["openai"]);
+    upstreamReply = () => {
+      const [upstream] = Object.values(new WebSocketPair());
+      return new Response(null, {
+        status: 101,
+        webSocket: upstream,
+        headers: { "sec-websocket-protocol": "realtime" },
+      });
+    };
+    const res = await callWs(
+      new Request("https://proxy.example/v1/realtime", {
+        headers: {
+          "sec-websocket-protocol": "realtime, openai-insecure-api-key.tk-echo",
+        },
+      }),
+    );
+    expect(res.status).toBe(101);
+    // A browser handshake fails if the server does not pick one of the offered subprotocols.
+    expect(res.headers.get("sec-websocket-protocol")).toBe("realtime");
+  });
+});
+
 describe("handleWsProxy: security invariant", () => {
   it("never forwards the proxy token upstream in any slot", async () => {
     await seed("SECRET-WS", ["openai"]);
@@ -250,11 +274,8 @@ describe("handleWsProxy: security invariant", () => {
         },
       }),
     );
-    const blob = [
-      captured!.url,
-      captured!.headers.get("authorization"),
-      captured!.headers.get("sec-websocket-protocol"),
-    ].join("|");
+    // Scan the ENTIRE outbound surface (every header entry + the URL), like the HTTP invariant.
+    const blob = [captured!.url, ...[...captured!.headers].flat()].join("|");
     expect(blob).not.toContain("SECRET-WS");
   });
 });

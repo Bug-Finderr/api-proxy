@@ -3,7 +3,13 @@ import type { CoarseProvider, TokenMetadata } from "../types";
 
 type Row = TokenMetadata & { hash: string; lastUsed?: string };
 
-const HTMX = "https://unpkg.com/htmx.org@2.0.9";
+// Pinned and hash-verified: the admin page holds token-mint power and receives ADMIN_SECRET,
+// so a tampered CDN response must not execute. SRI computed from the npm-published artifact
+// (unpkg, jsdelivr, and the registry tarball all serve this exact file). HTMX and HTMX_SRI
+// must change together - the admin markup test pins the exact hash.
+const HTMX = "https://unpkg.com/htmx.org@2.0.9/dist/htmx.min.js";
+const HTMX_SRI =
+  "sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m";
 
 const STYLE = `
 :root{color-scheme:dark}
@@ -20,7 +26,7 @@ input[type=text],input[type=password],input[type=datetime-local]{width:100%;back
 .checks{display:flex;gap:14px;margin:12px 0}
 .checks label{display:flex;align-items:center;gap:6px;color:#cfcfd6;margin:0}
 button{background:#5b5bd6;color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
-button.ghost{background:transparent;border:1px solid #2a2a36;color:#cfcfd6;padding:5px 10px;font-weight:500}
+button.ghost,a.ghost{background:transparent;border:1px solid #2a2a36;border-radius:8px;color:#cfcfd6;padding:5px 10px;font:inherit;font-weight:500;display:inline-block;text-decoration:none;cursor:pointer}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#73737f;padding:0 8px 10px;font-weight:600}
 td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
@@ -37,9 +43,9 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 const providerPills = (providers: CoarseProvider[]) =>
   providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
-const timeAgo = (iso?: string) => {
+const usedOn = (iso?: string) => {
   if (!iso) return "never";
-  return iso.slice(0, 10);
+  return iso.slice(0, 10); // stamped at most once per UTC day, so the date is the resolution
 };
 
 export const tokenRow = (r: Row) => {
@@ -51,7 +57,7 @@ export const tokenRow = (r: Row) => {
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
 		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${r.expiresAt ? `${r.expiresAt.slice(0, 16).replace("T", " ")} UTC` : "never"}</span>`}</td>
-		<td class="muted">${timeAgo(r.lastUsed)}</td>
+		<td class="muted">${usedOn(r.lastUsed)}</td>
 		<td style="text-align:right;white-space:nowrap">
 			<button
 				class="ghost"
@@ -94,10 +100,37 @@ export const tokenTable = (rows: Row[]) => html`
 	</table>
 `;
 
-export const createdNotice = (token: string) => html`
+// Per-provider wiring the consumer pastes next to the token (README "Use it" in one line).
+// Gemini gets both rows: the native GenAI SDK uses the bare origin, the OpenAI-SDK-compat
+// route needs /v1beta/openai.
+const WIRING: Record<CoarseProvider, [label: string, path: string][]> = {
+  openai: [["openai", "/v1"]],
+  anthropic: [["anthropic", ""]],
+  gemini: [
+    ["gemini", ""],
+    ["gemini (OpenAI SDK)", "/v1beta/openai"],
+  ],
+};
+
+export const createdNotice = (
+  token: string,
+  providers: CoarseProvider[],
+  origin: string,
+) => html`
 	<div class="notice">
 		Token created. Copy it now - it is shown only once:
-		<code class="mono">${token}</code>
+		<code class="mono" id="new-token">${token}</code>
+		<button
+			class="ghost"
+			style="margin-top:8px"
+			onclick="navigator.clipboard.writeText(document.getElementById('new-token').textContent).then(() => { this.textContent = 'copied' })"
+		>
+			copy token
+		</button>
+		<div class="muted" style="margin-top:8px">
+			Point the client at:
+			${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono">${origin}${path}</code></div>`))}
+		</div>
 	</div>
 `;
 
@@ -110,17 +143,25 @@ export const loginPage = () => html`<!doctype html>
 			<style>
 				${raw(STYLE)}
 			</style>
-			<script src="${HTMX}"></script>
+			<script src="${HTMX}" integrity="${HTMX_SRI}" crossorigin="anonymous"></script>
 		</head>
 		<body>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>
 				<div class="card">
 					<h2>Sign in</h2>
-					<form hx-post="/admin/login" hx-swap="none">
+					<form
+						method="post"
+						hx-post="/admin/login"
+						hx-swap="none"
+						hx-on::response-error="document.getElementById('login-error').textContent = event.detail.xhr.responseText || 'login failed'"
+					>
+						<!-- method="post" is the no-htmx fallback: a native submit must never
+						     default to GET and leak the password into the URL/history. -->
 						<label for="password">Admin password</label>
 						<input type="password" id="password" name="password" autocomplete="off" />
 						<div style="margin-top:12px"><button type="submit">Sign in</button></div>
+						<div id="login-error" class="danger" style="margin-top:10px"></div>
 					</form>
 				</div>
 			</div>
@@ -136,11 +177,16 @@ export const dashboardPage = () => html`<!doctype html>
 			<style>
 				${raw(STYLE)}
 			</style>
-			<script src="${HTMX}"></script>
+			<script src="${HTMX}" integrity="${HTMX_SRI}" crossorigin="anonymous"></script>
 		</head>
-		<body>
+		<body
+			hx-on::response-error="const x = event.detail.xhr; if (x.status === 401) { location.href = '/admin' } else { document.getElementById('flash').textContent = x.responseText || ('request failed (' + x.status + ')') }"
+			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
+			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
+		>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>
+				<div id="flash" class="danger" style="margin:0 0 14px"></div>
 				<div class="card">
 					<h2>Add token</h2>
 					<form

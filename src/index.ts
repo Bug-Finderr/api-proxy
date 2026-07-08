@@ -20,7 +20,8 @@ export default {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       try {
         return await adminApp.fetch(req, env, ctx);
-      } catch {
+      } catch (err) {
+        console.error("admin route error", err);
         return new Response("admin error", { status: 500 });
       }
     }

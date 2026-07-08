@@ -1,8 +1,16 @@
 name = "api-proxy"
 main = "src/index.ts"
+# Bumping past 2026-03-17 flips WS binaryType default (websocket_standard_binary_type); the
+# tier-2 binary-frame test plus the explicit binaryType pin in ws.ts cover that transition.
 compatibility_date = "2025-01-01"
 workers_dev = true
 preview_urls = false
+
+# Persist console.* to Workers Logs (free plan: 200k events/day, 3-day retention - never a
+# charge). Infrastructure failures log their cause; without this, only a live `wrangler tail`
+# ever sees it.
+[observability]
+enabled = true
 
 # Token store. Create with: nubx wrangler kv namespace create api-proxy-tokens
 # then paste the returned id below before deploy. Local dev/tests use an in-memory namespace.
@@ -30,6 +38,16 @@ namespace_id = "1001"
 
   [ratelimits.simple]
   limit = 100
+  period = 60
+
+# Dedicated low-rate throttle for /admin/login, keyed per client IP (`login:<ip>`). Separate
+# ruleset so brute-force protection is not the proxy's 100/60 ceiling (~144k guesses/day).
+[[ratelimits]]
+name = "LOGIN_LIMITER"
+namespace_id = "1002"
+
+  [ratelimits.simple]
+  limit = 10
   period = 60
 
 # Secrets (set with `nubx wrangler secret put <NAME>`), never committed:

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
@@ -186,6 +187,13 @@ export async function seedToken(
   if (login.status !== 200)
     throw new Error(`admin login failed: ${login.status}`);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+  // Local dev KV persists across runs (.wrangler/state) and creation now 409s on an existing
+  // hash (overwrite guard), so make the seed idempotent: delete any stale record first.
+  const hash = createHash("sha256").update(opts.token).digest("hex");
+  await fetch(`${url}/admin/api/tokens/${hash}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
   const body = new URLSearchParams();
   body.set("label", opts.label ?? opts.token);
   body.set("token", opts.token);

@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  coarse,
   extractToken,
   realKeyFor,
   routeProvider,
   swapAuth,
 } from "../src/proxy";
-import type { Env } from "../src/types";
+import { coarse, type Env } from "../src/types";
 
 function ctx(
   headers: Record<string, string>,
@@ -101,50 +100,64 @@ describe("coarse", () => {
 });
 
 describe("swapAuth", () => {
+  // Every case carries the token in the ?key= slot too: swapAuth owns the URL strip as well.
+  const dualSlotUrl = () =>
+    new URL("https://proxy.example/v1/x?key=PROXY-TOKEN&alt=sse");
+
   it("sets bearer for openai and strips the other slots", () => {
     const h = new Headers({
       authorization: "Bearer PROXY-TOKEN",
       "x-api-key": "PROXY-TOKEN",
       "x-goog-api-key": "PROXY-TOKEN",
     });
-    swapAuth(h, "openai", "REALKEY");
+    const u = dualSlotUrl();
+    swapAuth(h, u, "openai", "REALKEY");
     expect(h.get("authorization")).toBe("Bearer REALKEY");
     expect(h.get("x-api-key")).toBeNull();
     expect(h.get("x-goog-api-key")).toBeNull();
+    expect(u.searchParams.get("key")).toBeNull();
   });
   it("sets x-api-key for anthropic and strips the other slots", () => {
     const h = new Headers({
       authorization: "Bearer PROXY-TOKEN",
       "x-api-key": "PROXY-TOKEN",
     });
-    swapAuth(h, "anthropic", "REALKEY");
+    const u = dualSlotUrl();
+    swapAuth(h, u, "anthropic", "REALKEY");
     expect(h.get("x-api-key")).toBe("REALKEY");
     expect(h.get("authorization")).toBeNull();
     expect(h.get("x-goog-api-key")).toBeNull();
+    expect(u.searchParams.get("key")).toBeNull();
   });
-  it("sets x-goog-api-key for gemini", () => {
+  it("sets x-goog-api-key for gemini and strips ?key=", () => {
     const h = new Headers({ "x-goog-api-key": "PROXY-TOKEN" });
-    swapAuth(h, "gemini", "REALKEY");
+    const u = dualSlotUrl();
+    swapAuth(h, u, "gemini", "REALKEY");
     expect(h.get("x-goog-api-key")).toBe("REALKEY");
+    expect(u.searchParams.get("key")).toBeNull();
   });
   it("sets bearer for gemini-openai", () => {
     const h = new Headers({ authorization: "Bearer PROXY-TOKEN" });
-    swapAuth(h, "gemini-openai", "REALKEY");
+    const u = dualSlotUrl();
+    swapAuth(h, u, "gemini-openai", "REALKEY");
     expect(h.get("authorization")).toBe("Bearer REALKEY");
   });
-  it("never leaves the proxy token in any auth header", () => {
+  it("never leaves the proxy token in any auth slot (headers or URL)", () => {
     const h = new Headers({
       "x-api-key": "PROXY-TOKEN",
       authorization: "Bearer PROXY-TOKEN",
       "x-goog-api-key": "PROXY-TOKEN",
     });
-    swapAuth(h, "anthropic", "REALKEY");
+    const u = dualSlotUrl();
+    swapAuth(h, u, "anthropic", "REALKEY");
     const all = [
+      u.toString(),
       h.get("authorization"),
       h.get("x-api-key"),
       h.get("x-goog-api-key"),
     ].join("|");
     expect(all).not.toContain("PROXY-TOKEN");
+    expect(u.searchParams.get("alt")).toBe("sse"); // non-auth query params survive
   });
 });
 
