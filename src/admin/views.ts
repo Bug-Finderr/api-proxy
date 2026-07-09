@@ -37,6 +37,8 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 tr.empty:not(:only-child){display:none}
 .notice{background:#0c2e1f;border:1px solid #1c5c3e;border-radius:8px;padding:12px;margin:0 0 14px}
 .notice code{display:block;background:#04140c;padding:8px 10px;border-radius:6px;margin-top:6px;word-break:break-all}
+.copy{cursor:pointer}
+.copy.copied::after{content:"✓";float:right;color:#74e0bb}
 .danger{color:#f08a8a;border-color:#5c2a2a}
 `;
 
@@ -131,17 +133,10 @@ export const createdNotice = (
   origin: string,
 ) => html`
 	<div class="notice">
-		Token created. Copy it now - it is shown only once:
-		<code class="mono" id="new-token">${token}</code>
-		<button
-			class="ghost"
-			style="margin-top:8px"
-			hx-on:click="navigator.clipboard.writeText(document.getElementById('new-token').textContent).then(() => { this.textContent = 'copied' })"
-		>
-			copy token
-		</button>
+		Token created. Click to copy - it is shown only once:
+		<code class="mono copy">${token}</code>
 		<div class="muted" style="margin-top:8px">
-			Point the client at: ${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono">${origin}${path}</code></div>`))}
+			Point the client at: ${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono copy">${origin}${path}</code></div>`))}
 		</div>
 	</div>
 `;
@@ -180,6 +175,7 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
+			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) })"
 		>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>
@@ -196,7 +192,7 @@ export const dashboardPage = () => html`<!doctype html>
 						<div class="row">
 							<div>
 								<label for="label">Label</label>
-								<input type="text" id="label" name="label" placeholder="alice-laptop" />
+								<input type="text" id="label" name="label" placeholder="alice-laptop" required />
 							</div>
 							<div>
 								<label for="token">Token (blank = generate)</label>

@@ -123,6 +123,8 @@ app.get("/api/tokens", async (c) =>
 
 app.post("/api/tokens", async (c) => {
   const fd = await c.req.formData();
+  const label = String(fd.get("label") || "").trim();
+  if (!label) return c.text("label is required", 400);
   const providers = parseProviders(fd);
   // Silent scope substitution is the wrong default for a security control: no boxes, no token.
   if (!providers.length) return c.text("pick at least one provider", 400);
@@ -145,7 +147,7 @@ app.post("/api/tokens", async (c) => {
     expiresAt = d.toISOString();
   }
   const { token, hash, meta } = await createToken(c.env.TOKENS, {
-    label: String(fd.get("label") || ""),
+    label,
     providers,
     token: custom || undefined,
     expiresAt,
@@ -165,7 +167,10 @@ app.put("/api/tokens/:hash", async (c) => {
   const fd = await c.req.formData();
   const patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">> =
     {};
-  if (fd.has("label")) patch.label = String(fd.get("label"));
+  if (fd.has("label")) {
+    patch.label = String(fd.get("label")).trim();
+    if (!patch.label) return c.text("label is required", 400);
+  }
   if (fd.has("status")) {
     const s = String(fd.get("status"));
     // Whitelist, don't default: a malformed value must not silently re-enable a token.
