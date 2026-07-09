@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { secureHeaders } from "hono/secure-headers";
 import {
   createToken,
   deleteToken,
@@ -11,6 +12,7 @@ import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
   dashboardPage,
+  HTMX,
   loginPage,
   tokenRow,
   tokenTable,
@@ -42,6 +44,23 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
     );
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
+
+// htmx compiles hx-on handlers and hx-trigger event filters via Function, hence 'unsafe-eval'.
+app.use(
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'none'"],
+      scriptSrc: ["'unsafe-eval'", HTMX],
+      styleSrc: ["'unsafe-inline'"],
+      connectSrc: ["'self'"],
+      imgSrc: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+    },
+    xFrameOptions: "DENY",
+  }),
+);
 
 // Login is the only unguarded route (registered before the auth guard).
 app.post("/login", async (c) => {
@@ -150,7 +169,11 @@ app.put("/api/tokens/:hash", async (c) => {
     if (s !== "active" && s !== "disabled") return c.text("bad status", 400);
     patch.status = s;
   }
-  if (fd.has("providers")) patch.providers = parseProviders(fd);
+  if (fd.has("providers")) {
+    patch.providers = parseProviders(fd);
+    if (!patch.providers.length)
+      return c.text("pick at least one provider", 400);
+  }
   const meta = await updateToken(c.env.TOKENS, hash, patch);
   if (!meta) return c.text("not found", 404);
   return c.html(tokenRow({ hash, ...meta }), 200, {

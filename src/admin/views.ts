@@ -6,9 +6,9 @@ import type { CoarseProvider } from "../types";
 // so a tampered CDN response must not execute. SRI computed from the npm-published artifact
 // (unpkg, jsdelivr, and the registry tarball all serve this exact file). HTMX and HTMX_SRI
 // must change together - the admin markup test pins the exact hash.
-const HTMX = "https://unpkg.com/htmx.org@2.0.9/dist/htmx.min.js";
+export const HTMX = "https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js";
 const HTMX_SRI =
-  "sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m";
+  "sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V";
 
 const STYLE = `
 :root{color-scheme:dark}
@@ -134,7 +134,7 @@ export const createdNotice = (
 		<button
 			class="ghost"
 			style="margin-top:8px"
-			onclick="navigator.clipboard.writeText(document.getElementById('new-token').textContent).then(() => { this.textContent = 'copied' })"
+			hx-on:click="navigator.clipboard.writeText(document.getElementById('new-token').textContent).then(() => { this.textContent = 'copied' })"
 		>
 			copy token
 		</button>

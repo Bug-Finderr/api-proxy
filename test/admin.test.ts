@@ -52,6 +52,20 @@ describe("admin auth", () => {
     expect(page).toContain("login-error");
     expect(page).toContain("hx-on::response-error");
   });
+  it("sends security headers on every admin response", async () => {
+    const res = await call("/admin");
+    const csp = res.headers.get("content-security-policy")!;
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain(
+      "script-src 'unsafe-eval' https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js",
+    );
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("strict-transport-security")).toBeTruthy();
+  });
+
   it("rejects a wrong password", async () => {
     const res = await call("/admin/login", form({ password: "nope" }));
     expect(res.status).toBe(401);
@@ -202,7 +216,7 @@ describe("admin token CRUD", () => {
     // htmx delivery is hash-pinned (SRI): the EXACT hash is asserted so an accidental edit
     // to HTMX_SRI (which would make the browser refuse htmx and brick the admin) fails here.
     expect(page).toContain(
-      'integrity="sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m"',
+      'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',
     );
     expect(page).toContain('crossorigin="anonymous"');
     expect(page).toContain('id="flash"');
@@ -212,6 +226,16 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
+  });
+
+  it("rejects a PUT that would strip every provider", async () => {
+    const cookie = await login();
+    const res = await call(`/admin/api/tokens/${"a".repeat(64)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      body: "providers=bogus",
+    });
+    expect(res.status).toBe(400);
   });
 
   it("rejects a malformed token id on PUT and DELETE", async () => {
