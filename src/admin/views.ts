@@ -24,7 +24,9 @@ input[type=text],input[type=password],input[type=datetime-local]{width:100%;back
 .row>div{flex:1;min-width:160px}
 .checks{display:flex;gap:14px;margin:12px 0}
 .checks label{display:flex;align-items:center;gap:6px;color:#cfcfd6;margin:0}
-button{background:#5b5bd6;color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button{background:#5b5bd6;color:#fff;border:1px solid transparent;border-radius:8px;padding:5px 10px;font:inherit;font-weight:600;cursor:pointer}
+.bar{display:flex;justify-content:space-between;align-items:center;margin:0 0 20px}
+.bar h1{margin:0}
 button.ghost,a.ghost{background:transparent;border:1px solid #2a2a36;border-radius:8px;color:#cfcfd6;padding:5px 10px;font:inherit;font-weight:500;display:inline-block;text-decoration:none;cursor:pointer}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#73737f;padding:0 8px 10px;font-weight:600}
@@ -178,7 +180,10 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) })"
 		>
 			<div class="wrap">
-				<h1>api-proxy admin</h1>
+				<div class="bar">
+					<h1>api-proxy admin</h1>
+					<a class="ghost" href="/admin/logout">sign out</a>
+				</div>
 				<div id="flash" class="danger" style="margin:0 0 14px"></div>
 				<div class="card">
 					<h2>Add token</h2>
@@ -200,9 +205,13 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<!-- the picker's Today fills the current minute; a time nobody chose means end-of-day -->
+								<!-- The picker's Today fills the current minute (a time nobody chose) -> snap to end-of-day.
+								     On input (live), not change (fires only at close, clobbering a picked time). An open popup
+								     never re-reads the value (Chromium snapshots it once at open), so blur() tears it down
+								     synchronously and showPicker() reopens it on 23:59 in the same tick. In-popup clicks grant
+								     the page transient activation in Chromium only - elsewhere the catch leaves it closed. -->
 								<input type="datetime-local" id="expiresAt" name="expiresAt"
-									hx-on:change="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) this.value = this.value.slice(0, 11) + '23:59'"
+									hx-on:input="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) { this.value = this.value.slice(0, 11) + '23:59'; this.blur(); try { this.showPicker() } catch {} }"
 								/>
 							</div>
 						</div>
@@ -212,7 +221,6 @@ export const dashboardPage = () => html`<!doctype html>
 							<label><input type="checkbox" name="providers" value="gemini" /> Gemini</label>
 						</div>
 						<button type="submit">Add</button>
-						<a class="ghost" href="/admin/logout" style="margin-left:10px;text-decoration:none">sign out</a>
 					</form>
 					<div id="created" style="margin-top:14px"></div>
 				</div>
