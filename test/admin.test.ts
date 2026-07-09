@@ -52,6 +52,20 @@ describe("admin auth", () => {
     expect(page).toContain("login-error");
     expect(page).toContain("hx-on::response-error");
   });
+  it("sends security headers on every admin response", async () => {
+    const res = await call("/admin");
+    const csp = res.headers.get("content-security-policy")!;
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain(
+      "script-src 'unsafe-eval' https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js",
+    );
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("strict-transport-security")).toBeTruthy();
+  });
+
   it("rejects a wrong password", async () => {
     const res = await call("/admin/login", form({ password: "nope" }));
     expect(res.status).toBe(401);
@@ -202,7 +216,7 @@ describe("admin token CRUD", () => {
     // htmx delivery is hash-pinned (SRI): the EXACT hash is asserted so an accidental edit
     // to HTMX_SRI (which would make the browser refuse htmx and brick the admin) fails here.
     expect(page).toContain(
-      'integrity="sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m"',
+      'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',
     );
     expect(page).toContain('crossorigin="anonymous"');
     expect(page).toContain('id="flash"');
@@ -212,6 +226,37 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
+    // mutations swap their own fragments; a stale-list refresh trigger must not come back
+    expect(page).not.toContain("tokens-changed");
+    // click-to-copy delegation + tick feedback, and label is mandatory at the form level
+    expect(page).toContain("code.copy");
+    expect(page).toContain("navigator.clipboard.writeText");
+    expect(page).toContain('name="label" placeholder="alice-laptop" required');
+    // picker's Today fills the current minute; the change handler snaps that to end-of-day
+    expect(page).toContain("this.value.slice(0, 11) + '23:59'");
+    const table = await (
+      await call("/admin/api/tokens", { headers: { cookie } })
+    ).text();
+    expect(table).toContain('<tbody id="rows">');
+    expect(table).toContain('class="empty"');
+  });
+
+  it("rejects a missing or blank label", async () => {
+    const cookie = await login();
+    const res = await call("/admin/api/tokens", {
+      ...form({ label: "  ", providers: "openai" }, cookie),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a PUT that would strip every provider", async () => {
+    const cookie = await login();
+    const res = await call(`/admin/api/tokens/${"a".repeat(64)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      body: "providers=bogus",
+    });
+    expect(res.status).toBe(400);
   });
 
   it("rejects a malformed token id on PUT and DELETE", async () => {
@@ -386,8 +431,14 @@ describe("admin input guards", () => {
     });
     const body = await res.text();
     expect(body).toContain("notice-test-token");
-    expect(body).toContain("copy token");
-    expect(body).toContain("https://proxy.example/v1");
+    // click-to-copy targets: token and every wiring URL carry the copy class
+    expect(body).toContain('<code class="mono copy">notice-test-token</code>');
+    expect(body).toContain(
+      '<code class="mono copy">https://proxy.example/v1</code>',
+    );
+    // the new row rides along out-of-band: KV list() lags writes, so a refresh can't show it
+    expect(body).toContain(`id="tok-${await sha256hex("notice-test-token")}"`);
+    expect(body).toContain('hx-swap-oob="afterbegin:#rows"');
 
     // a gemini-scoped token shows BOTH wirings: native GenAI (bare origin) + OpenAI-SDK compat
     const gem = await call("/admin/api/tokens", {

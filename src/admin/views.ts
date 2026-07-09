@@ -6,9 +6,9 @@ import type { CoarseProvider } from "../types";
 // so a tampered CDN response must not execute. SRI computed from the npm-published artifact
 // (unpkg, jsdelivr, and the registry tarball all serve this exact file). HTMX and HTMX_SRI
 // must change together - the admin markup test pins the exact hash.
-const HTMX = "https://unpkg.com/htmx.org@2.0.9/dist/htmx.min.js";
+export const HTMX = "https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js";
 const HTMX_SRI =
-  "sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m";
+  "sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V";
 
 const STYLE = `
 :root{color-scheme:dark}
@@ -34,8 +34,11 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 .openai{background:#0c3b2e;color:#74e0bb}.anthropic{background:#3a2740;color:#d6a6ec}.gemini{background:#10325c;color:#86b7f5}
 .muted{color:#73737f}
 .disabled{opacity:.5}
+tr.empty:not(:only-child){display:none}
 .notice{background:#0c2e1f;border:1px solid #1c5c3e;border-radius:8px;padding:12px;margin:0 0 14px}
 .notice code{display:block;background:#04140c;padding:8px 10px;border-radius:6px;margin-top:6px;word-break:break-all}
+.copy{cursor:pointer}
+.copy.copied::after{content:"✓";float:right;color:#74e0bb}
 .danger{color:#f08a8a;border-color:#5c2a2a}
 `;
 
@@ -106,8 +109,9 @@ export const tokenTable = (rows: TokenRow[]) => html`
 				<th></th>
 			</tr>
 		</thead>
-		<tbody>
-			${rows.length ? rows.map(tokenRow) : html`<tr><td colspan="7" class="muted">No tokens yet.</td></tr>`}
+		<tbody id="rows">
+			<tr class="empty"><td colspan="7" class="muted">No tokens yet.</td></tr>
+			${rows.map((r) => tokenRow(r))}
 		</tbody>
 	</table>
 `;
@@ -129,17 +133,10 @@ export const createdNotice = (
   origin: string,
 ) => html`
 	<div class="notice">
-		Token created. Copy it now - it is shown only once:
-		<code class="mono" id="new-token">${token}</code>
-		<button
-			class="ghost"
-			style="margin-top:8px"
-			onclick="navigator.clipboard.writeText(document.getElementById('new-token').textContent).then(() => { this.textContent = 'copied' })"
-		>
-			copy token
-		</button>
+		Token created. Click to copy - it is shown only once:
+		<code class="mono copy">${token}</code>
 		<div class="muted" style="margin-top:8px">
-			Point the client at: ${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono">${origin}${path}</code></div>`))}
+			Point the client at: ${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono copy">${origin}${path}</code></div>`))}
 		</div>
 	</div>
 `;
@@ -178,6 +175,7 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
+			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) })"
 		>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>
@@ -194,7 +192,7 @@ export const dashboardPage = () => html`<!doctype html>
 						<div class="row">
 							<div>
 								<label for="label">Label</label>
-								<input type="text" id="label" name="label" placeholder="alice-laptop" />
+								<input type="text" id="label" name="label" placeholder="alice-laptop" required />
 							</div>
 							<div>
 								<label for="token">Token (blank = generate)</label>
@@ -202,7 +200,10 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<input type="datetime-local" id="expiresAt" name="expiresAt" />
+								<!-- the picker's Today fills the current minute; a time nobody chose means end-of-day -->
+								<input type="datetime-local" id="expiresAt" name="expiresAt"
+									hx-on:change="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) this.value = this.value.slice(0, 11) + '23:59'"
+								/>
 							</div>
 						</div>
 						<div class="checks">
@@ -217,7 +218,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body, every 120s [document.visibilityState==='visible']">
+					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible']">
 						Loading…
 					</div>
 				</div>

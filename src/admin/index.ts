@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { html } from "hono/html";
+import { secureHeaders } from "hono/secure-headers";
 import {
   createToken,
   deleteToken,
@@ -11,6 +13,7 @@ import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
   dashboardPage,
+  HTMX,
   loginPage,
   tokenRow,
   tokenTable,
@@ -42,6 +45,23 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
     );
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
+
+// htmx compiles hx-on handlers and hx-trigger event filters via Function, hence 'unsafe-eval'.
+app.use(
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'none'"],
+      scriptSrc: ["'unsafe-eval'", HTMX],
+      styleSrc: ["'unsafe-inline'"],
+      connectSrc: ["'self'"],
+      imgSrc: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+    },
+    xFrameOptions: "DENY",
+  }),
+);
 
 // Login is the only unguarded route (registered before the auth guard).
 app.post("/login", async (c) => {
@@ -103,6 +123,8 @@ app.get("/api/tokens", async (c) =>
 
 app.post("/api/tokens", async (c) => {
   const fd = await c.req.formData();
+  const label = String(fd.get("label") || "").trim();
+  if (!label) return c.text("label is required", 400);
   const providers = parseProviders(fd);
   // Silent scope substitution is the wrong default for a security control: no boxes, no token.
   if (!providers.length) return c.text("pick at least one provider", 400);
@@ -124,16 +146,18 @@ app.post("/api/tokens", async (c) => {
       return c.text("invalid expiry", 400);
     expiresAt = d.toISOString();
   }
-  const { token } = await createToken(c.env.TOKENS, {
-    label: String(fd.get("label") || ""),
+  const { token, hash, meta } = await createToken(c.env.TOKENS, {
+    label,
     providers,
     token: custom || undefined,
     expiresAt,
   });
+  // KV list() lags writes by up to 60s, so a table refresh can't show the new token;
+  // the response carries the authoritative row itself, swapped in out-of-band. The tbody
+  // is the disposable carrier htmx unwraps (non-outerHTML OOB inserts content, not element).
   return c.html(
-    createdNotice(token, providers, new URL(c.req.url).origin),
-    200,
-    { "HX-Trigger": "tokens-changed" },
+    html`${createdNotice(token, providers, new URL(c.req.url).origin)}
+		<template><tbody hx-swap-oob="afterbegin:#rows">${tokenRow({ hash, ...meta })}</tbody></template>`,
   );
 });
 
@@ -143,26 +167,31 @@ app.put("/api/tokens/:hash", async (c) => {
   const fd = await c.req.formData();
   const patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">> =
     {};
-  if (fd.has("label")) patch.label = String(fd.get("label"));
+  if (fd.has("label")) {
+    patch.label = String(fd.get("label")).trim();
+    if (!patch.label) return c.text("label is required", 400);
+  }
   if (fd.has("status")) {
     const s = String(fd.get("status"));
     // Whitelist, don't default: a malformed value must not silently re-enable a token.
     if (s !== "active" && s !== "disabled") return c.text("bad status", 400);
     patch.status = s;
   }
-  if (fd.has("providers")) patch.providers = parseProviders(fd);
+  if (fd.has("providers")) {
+    patch.providers = parseProviders(fd);
+    if (!patch.providers.length)
+      return c.text("pick at least one provider", 400);
+  }
   const meta = await updateToken(c.env.TOKENS, hash, patch);
   if (!meta) return c.text("not found", 404);
-  return c.html(tokenRow({ hash, ...meta }), 200, {
-    "HX-Trigger": "tokens-changed",
-  });
+  return c.html(tokenRow({ hash, ...meta }));
 });
 
 app.delete("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
   await deleteToken(c.env.TOKENS, hash);
-  return c.body("", 200, { "HX-Trigger": "tokens-changed" });
+  return c.body("", 200);
 });
 
 export default app;
