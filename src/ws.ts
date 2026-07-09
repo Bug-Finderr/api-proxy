@@ -1,8 +1,5 @@
 // The WebSocket proxy hot-path. Mirrors proxy.ts (validate the token -> swap in the real key ->
-// forward), but for a WS upgrade handshake plus a bidirectional frame pump. Anthropic has no wss
-// API today; OpenAI (`/v1/realtime`, `/v1/responses`) and Gemini Live (`...BidiGenerateContent`)
-// do. Auth on a WS handshake can sit in a header, a `?key=` query param, or - because a browser
-// WebSocket cannot set headers - the `Sec-WebSocket-Protocol` subprotocol.
+// forward), but for a WS upgrade handshake plus a bidirectional frame pump.
 
 import {
   authorize,
@@ -17,29 +14,29 @@ import { touchLastUsed } from "./tokens";
 import { coarse, type Env, type Provider } from "./types";
 import { rewriteToUpstream } from "./upstreams";
 
-// OpenAI browser clients smuggle the key as a Sec-WebSocket-Protocol entry, since a browser
-// WebSocket cannot set the Authorization header. Offered shape: ["realtime",
-// "openai-insecure-api-key.<KEY>", "openai-organization.<ID>"?, "openai-project.<ID>"?,
-// "openai-beta.realtime-v1"?]. We read the key here and re-present it as a Bearer header upstream
-// (the worker CAN set headers), keeping the remaining subprotocols so the handshake still
-// negotiates "realtime".
+// A browser WebSocket cannot set headers, so OpenAI clients smuggle the key as a
+// Sec-WebSocket-Protocol entry; we re-present it as a Bearer header upstream and keep
+// the remaining subprotocols so the handshake still negotiates "realtime".
 const OPENAI_KEY_SUBPROTOCOL = "openai-insecure-api-key.";
 
 // Close codes a peer is not allowed to send back via close(); forward as a bare close() instead.
 const CLOSE_FORBIDDEN = new Set([1004, 1005, 1006, 1015]);
 
-/** The proxy token from the subprotocol list, if a browser smuggled it there. */
+const subprotocols = (header: string | null): string[] =>
+  header
+    ? header
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+
 function subprotocolToken(header: string | null): string | null {
-  if (!header) return null;
-  for (const part of header.split(",")) {
-    const v = part.trim();
+  for (const v of subprotocols(header))
     if (v.startsWith(OPENAI_KEY_SUBPROTOCOL))
       return v.slice(OPENAI_KEY_SUBPROTOCOL.length) || null;
-  }
   return null;
 }
 
-/** Proxy token from any WS auth slot: the HTTP slots (header/query) plus the subprotocol. */
 export function extractWsToken(req: Request, url: URL): string | null {
   return (
     extractToken(req, url) ??
@@ -66,16 +63,13 @@ export function prepareWsUpstream(
   realKey: string,
   env: Env,
 ): { target: string; headers: Headers } {
-  // Rewrite host/port (path + query kept). The scheme stays http(s): a Worker opens an upstream
-  // socket by fetching the http(s) URL with `Upgrade: websocket`, not by using a ws:// URL.
+  // The scheme stays http(s): a Worker opens an upstream socket by fetching the http(s)
+  // URL with `Upgrade: websocket`, not a ws:// URL.
   rewriteToUpstream(url, provider, env);
 
   const headers = new Headers(req.headers);
-  // Strip every inbound auth slot (same owner as the HTTP path), then set exactly one
-  // upstream slot in the shape this provider's WS API expects.
   stripAuthSlots(headers, url);
-  // The handshake headers are runtime-owned; drop the client's so CF regenerates them for the
-  // upstream leg, and signal upgrade intent explicitly.
+  // The handshake headers are runtime-owned; drop the client's and signal upgrade intent.
   headers.delete("sec-websocket-key");
   headers.delete("sec-websocket-version");
   headers.delete("sec-websocket-accept");
@@ -89,23 +83,15 @@ export function prepareWsUpstream(
     headers.set("authorization", `Bearer ${realKey}`); // openai + gemini-openai
   }
 
-  // Drop the smuggled key entry from the subprotocol offer, keep the rest (realtime, org,
-  // project, beta). Remove the header entirely if nothing else remains.
-  const proto = headers.get("sec-websocket-protocol");
-  if (proto) {
-    const kept = proto
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s && !s.startsWith(OPENAI_KEY_SUBPROTOCOL));
-    if (kept.length) headers.set("sec-websocket-protocol", kept.join(", "));
-    else headers.delete("sec-websocket-protocol");
-  }
+  const kept = subprotocols(headers.get("sec-websocket-protocol")).filter(
+    (s) => !s.startsWith(OPENAI_KEY_SUBPROTOCOL),
+  );
+  if (kept.length) headers.set("sec-websocket-protocol", kept.join(", "));
+  else headers.delete("sec-websocket-protocol");
 
   return { target: url.toString(), headers };
 }
 
-/** The close code to forward to the peer, or null to send a bare close(): a peer may not send the
- *  reserved/abnormal codes in CLOSE_FORBIDDEN or anything outside 1000-4999. */
 export function forwardCloseCode(code: number): number | null {
   return code >= 1000 && code <= 4999 && !CLOSE_FORBIDDEN.has(code)
     ? code
@@ -145,8 +131,7 @@ export async function handleWsProxy(
   if (!token || !provider)
     return new Response("missing token", { status: 401 });
 
-  // Shared validate -> scope -> rate-limit spine. The limiter gates the connection, not each
-  // frame: one upgrade = one limiter hit.
+  // The limiter gates the connection, not each frame: one upgrade = one limiter hit.
   const auth = await authorize(env, token, provider);
   if ("status" in auth)
     return new Response(auth.message, {
@@ -166,8 +151,7 @@ export async function handleWsProxy(
   let upstreamRes: Response;
   try {
     upstreamRes = await fetch(target, { headers });
-    // Same OpenAI geo-403 escape hatch as HTTP: a 403 from a bad colo is retried from the
-    // NA-pinned egress DO, which carries the WS upgrade just like a plain fetch.
+    // Same geo-403 escape hatch as HTTP (see UsEgress in proxy.ts).
     if (coarse(provider) === "openai" && (await isGeoBlock(upstreamRes))) {
       console.warn(
         "openai geo-403 on ws upgrade; retrying via the NA egress DO",

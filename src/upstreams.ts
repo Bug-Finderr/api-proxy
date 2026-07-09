@@ -1,5 +1,4 @@
-// Upstream resolver + test seam. *_UPSTREAM env vars default to the real hosts, so
-// production is unchanged when unset; tests point them at a local mock.
+// *_UPSTREAM env vars are a test seam; unset in production, so the real hosts apply.
 import { coarse, type Env, type Provider } from "./types";
 
 const DEFAULTS = {
@@ -19,7 +18,6 @@ export function upstreamBase(provider: Provider, env: Env): string {
   }
 }
 
-/** Rewrite protocol/hostname/port to the upstream, leaving path and query intact. */
 export function rewriteToUpstream(
   url: URL,
   provider: Provider,

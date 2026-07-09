@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import http from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unstable_dev } from "wrangler";
+import {
+  ADMIN_SECRET,
+  FAKE,
+  seedToken,
+  startMockUpstream,
+} from "./sdk-compat/mock.mjs";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const py =
@@ -25,180 +29,10 @@ const pyFiles = readdirSync(dir)
   .sort();
 if (pyFiles.length === 0) process.exit(0);
 
-const FAKE = {
-  openai: "FAKE-OPENAI-KEY",
-  anthropic: "FAKE-ANTHROPIC-KEY",
-  gemini: "FAKE-GEMINI-KEY",
-};
-const ADMIN_SECRET = "compat-admin-secret";
 const TOKEN = "tk-py-compat-1";
 const PER_FILE_TIMEOUT_MS = 90_000;
 
-// --- mock upstream (mirrors test/sdk-compat/setup.ts, plus control endpoints) ---
-let captured = null;
-
-function providerFromPath(path) {
-  if (path.includes("/v1beta/openai/")) return "openai";
-  if (
-    path.includes(":generateContent") ||
-    path.includes(":streamGenerateContent") ||
-    path.startsWith("/v1beta/")
-  )
-    return "gemini";
-  if (path.includes("/v1/messages")) return "anthropic";
-  return "openai";
-}
-
-function bodyFor(provider) {
-  if (provider === "anthropic")
-    return {
-      id: "msg_1",
-      type: "message",
-      role: "assistant",
-      model: "x",
-      content: [{ type: "text", text: "hi" }],
-      stop_reason: "end_turn",
-      usage: { input_tokens: 1, output_tokens: 1 },
-    };
-  if (provider === "gemini")
-    return {
-      candidates: [
-        {
-          content: { parts: [{ text: "hi" }], role: "model" },
-          finishReason: "STOP",
-        },
-      ],
-      usageMetadata: {
-        promptTokenCount: 1,
-        candidatesTokenCount: 1,
-        totalTokenCount: 2,
-      },
-    };
-  return {
-    id: "chatcmpl_1",
-    object: "chat.completion",
-    created: 0,
-    model: "x",
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content: "hi" },
-        finish_reason: "stop",
-      },
-    ],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  };
-}
-
-function writeSse(res, provider) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-  });
-  if (provider === "anthropic") {
-    res.write(
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
-    );
-    res.write(
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
-    );
-    res.write(
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n',
-    );
-    res.write(
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-    );
-    res.write(
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
-    );
-    res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
-  } else if (provider === "gemini") {
-    res.write(
-      'data: {"candidates":[{"content":{"parts":[{"text":"hi"}],"role":"model"},"finishReason":"STOP"}]}\n\n',
-    );
-  } else {
-    res.write(
-      'data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n',
-    );
-    res.write(
-      'data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
-    );
-    res.write("data: [DONE]\n\n");
-  }
-  res.end();
-}
-
-function startMock() {
-  return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      const path = req.url ?? "";
-      // control endpoints - the Python test reads/clears the capture over HTTP
-      if (path === "/__captured") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(captured));
-        return;
-      }
-      if (path === "/__reset") {
-        captured = null;
-        res.writeHead(204);
-        res.end();
-        return;
-      }
-      const chunks = [];
-      req.on("data", (c) => chunks.push(c));
-      req.on("end", () => {
-        const body = Buffer.concat(chunks).toString();
-        captured = {
-          method: req.method ?? "",
-          path,
-          headers: req.headers,
-          body,
-        };
-        const provider = providerFromPath(path);
-        const stream =
-          path.includes("streamGenerateContent") ||
-          /[?&]alt=sse/.test(path) ||
-          /"stream"\s*:\s*true/.test(body);
-        if (stream) return writeSse(res, provider);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(bodyFor(provider)));
-      });
-    });
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ url: `http://127.0.0.1:${port}`, close: () => server.close() });
-    });
-  });
-}
-
-async function seedToken(workerUrl) {
-  const login = await fetch(`${workerUrl}/admin/login`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ password: ADMIN_SECRET }).toString(),
-  });
-  if (login.status !== 200)
-    throw new Error(`admin login failed: ${login.status}`);
-  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-  // Local dev KV persists across runs; creation 409s on an existing hash (overwrite guard),
-  // so delete any stale record first to keep the seed idempotent.
-  const hash = createHash("sha256").update(TOKEN).digest("hex");
-  await fetch(`${workerUrl}/admin/api/tokens/${hash}`, {
-    method: "DELETE",
-    headers: { cookie },
-  });
-  const form = new URLSearchParams({ label: TOKEN, token: TOKEN });
-  for (const p of ["openai", "anthropic", "gemini"])
-    form.append("providers", p);
-  const res = await fetch(`${workerUrl}/admin/api/tokens`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", cookie },
-    body: form.toString(),
-  });
-  if (res.status !== 200) throw new Error(`seed token failed: ${res.status}`);
-}
-
-const mock = await startMock();
+const mock = await startMockUpstream();
 const worker = await unstable_dev("src/index.ts", {
   config: "wrangler.toml",
   local: true,
@@ -224,7 +58,10 @@ console.log(`[py] worker ${workerUrl}  mock ${mock.url}`);
 
 let failed = 0;
 try {
-  await seedToken(workerUrl);
+  await seedToken(workerUrl, {
+    token: TOKEN,
+    providers: ["openai", "anthropic", "gemini"],
+  });
   const env = {
     ...process.env,
     PROXY_WORKER_URL: workerUrl,
@@ -245,7 +82,7 @@ try {
   ])
     delete env[k];
   for (const file of pyFiles) {
-    captured = null;
+    mock.reset();
     console.log(`[py] ${file}`);
     // Async spawn (NOT spawnSync): the mock lives in this event loop, and spawnSync would freeze
     // it for the whole child run - so the worker could never reach the mock and every test would
@@ -272,7 +109,7 @@ try {
   }
 } finally {
   await worker.stop();
-  mock.close();
+  await mock.close();
 }
 
 process.exit(failed ? 1 : 0);

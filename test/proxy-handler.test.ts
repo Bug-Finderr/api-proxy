@@ -230,6 +230,37 @@ describe("security invariant", () => {
     const slots = [captured!.url, ...[...captured!.headers].flat()].join("|");
     expect(slots).not.toContain("SECRET-TOKEN");
   });
+
+  it("x-api-key wins over the other auth slots, and every slot is stripped (distinct sentinels)", async () => {
+    await createToken(env.TOKENS, {
+      label: "prec",
+      providers: ["anthropic"],
+      token: "PRECEDENCE-TOKEN",
+    });
+    // Distinct sentinels per slot: if extractToken ever preferred another slot, the lookup
+    // would miss (401) and the anthropic routing assert below would fail.
+    await call(
+      new Request("https://proxy.example/v1/messages?key=WRONG-QUERY-SENT", {
+        method: "POST",
+        headers: {
+          "x-api-key": "PRECEDENCE-TOKEN",
+          authorization: "Bearer WRONG-BEARER-SENT",
+          "x-goog-api-key": "WRONG-GOOG-SENT",
+        },
+        body: "{}",
+      }),
+    );
+    expect(new URL(captured!.url).hostname).toBe("api.anthropic.com");
+    expect(captured!.headers.get("x-api-key")).toBe("real-anthropic-key-FAKE");
+    const slots = [captured!.url, ...[...captured!.headers].flat()].join("|");
+    for (const sentinel of [
+      "PRECEDENCE-TOKEN",
+      "WRONG-BEARER-SENT",
+      "WRONG-GOOG-SENT",
+      "WRONG-QUERY-SENT",
+    ])
+      expect(slots).not.toContain(sentinel);
+  });
 });
 
 describe("upstream failure", () => {

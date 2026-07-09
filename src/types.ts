@@ -14,12 +14,11 @@ export interface TokenMetadata {
   createdAt: string; // ISO
   expiresAt?: string; // ISO (UTC); absent = never expires
   // lastUsed is stored in a separate `<hash>:lu` key (see tokens.ts), not here.
-  // reserved for Later: limits, spend
 }
 
 export interface Env {
   TOKENS: KVNamespace;
-  US_EGRESS: DurableObjectNamespace; // North-America-pinned egress relay (see egress.ts)
+  US_EGRESS: DurableObjectNamespace; // North-America-pinned egress relay (UsEgress in proxy.ts)
   RATE_LIMITER: RateLimit; // per-token RPM limiter (Workers Rate Limiting binding)
   LOGIN_LIMITER: RateLimit; // low-rate per-IP throttle for /admin/login (separate ruleset)
   OPENAI_API_KEY: string;
