@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { html } from "hono/html";
 import { secureHeaders } from "hono/secure-headers";
 import {
   createToken,
@@ -143,16 +144,18 @@ app.post("/api/tokens", async (c) => {
       return c.text("invalid expiry", 400);
     expiresAt = d.toISOString();
   }
-  const { token } = await createToken(c.env.TOKENS, {
+  const { token, hash, meta } = await createToken(c.env.TOKENS, {
     label: String(fd.get("label") || ""),
     providers,
     token: custom || undefined,
     expiresAt,
   });
+  // KV list() lags writes by up to 60s, so a table refresh can't show the new token;
+  // the response carries the authoritative row itself, swapped in out-of-band. The tbody
+  // is the disposable carrier htmx unwraps (non-outerHTML OOB inserts content, not element).
   return c.html(
-    createdNotice(token, providers, new URL(c.req.url).origin),
-    200,
-    { "HX-Trigger": "tokens-changed" },
+    html`${createdNotice(token, providers, new URL(c.req.url).origin)}
+		<template><tbody hx-swap-oob="afterbegin:#rows">${tokenRow({ hash, ...meta })}</tbody></template>`,
   );
 });
 
@@ -176,16 +179,14 @@ app.put("/api/tokens/:hash", async (c) => {
   }
   const meta = await updateToken(c.env.TOKENS, hash, patch);
   if (!meta) return c.text("not found", 404);
-  return c.html(tokenRow({ hash, ...meta }), 200, {
-    "HX-Trigger": "tokens-changed",
-  });
+  return c.html(tokenRow({ hash, ...meta }));
 });
 
 app.delete("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
   await deleteToken(c.env.TOKENS, hash);
-  return c.body("", 200, { "HX-Trigger": "tokens-changed" });
+  return c.body("", 200);
 });
 
 export default app;

@@ -34,6 +34,7 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 .openai{background:#0c3b2e;color:#74e0bb}.anthropic{background:#3a2740;color:#d6a6ec}.gemini{background:#10325c;color:#86b7f5}
 .muted{color:#73737f}
 .disabled{opacity:.5}
+tr.empty:not(:only-child){display:none}
 .notice{background:#0c2e1f;border:1px solid #1c5c3e;border-radius:8px;padding:12px;margin:0 0 14px}
 .notice code{display:block;background:#04140c;padding:8px 10px;border-radius:6px;margin-top:6px;word-break:break-all}
 .danger{color:#f08a8a;border-color:#5c2a2a}
@@ -106,8 +107,9 @@ export const tokenTable = (rows: TokenRow[]) => html`
 				<th></th>
 			</tr>
 		</thead>
-		<tbody>
-			${rows.length ? rows.map(tokenRow) : html`<tr><td colspan="7" class="muted">No tokens yet.</td></tr>`}
+		<tbody id="rows">
+			<tr class="empty"><td colspan="7" class="muted">No tokens yet.</td></tr>
+			${rows.map((r) => tokenRow(r))}
 		</tbody>
 	</table>
 `;
@@ -217,7 +219,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, tokens-changed from:body, every 120s [document.visibilityState==='visible']">
+					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible']">
 						Loading…
 					</div>
 				</div>

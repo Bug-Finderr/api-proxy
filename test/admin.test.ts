@@ -226,6 +226,13 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
+    // mutations swap their own fragments; a stale-list refresh trigger must not come back
+    expect(page).not.toContain("tokens-changed");
+    const table = await (
+      await call("/admin/api/tokens", { headers: { cookie } })
+    ).text();
+    expect(table).toContain('<tbody id="rows">');
+    expect(table).toContain('class="empty"');
   });
 
   it("rejects a PUT that would strip every provider", async () => {
@@ -412,6 +419,9 @@ describe("admin input guards", () => {
     expect(body).toContain("notice-test-token");
     expect(body).toContain("copy token");
     expect(body).toContain("https://proxy.example/v1");
+    // the new row rides along out-of-band: KV list() lags writes, so a refresh can't show it
+    expect(body).toContain(`id="tok-${await sha256hex("notice-test-token")}"`);
+    expect(body).toContain('hx-swap-oob="afterbegin:#rows"');
 
     // a gemini-scoped token shows BOTH wirings: native GenAI (bare origin) + OpenAI-SDK compat
     const gem = await call("/admin/api/tokens", {
