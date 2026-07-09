@@ -232,6 +232,8 @@ describe("admin token CRUD", () => {
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
+    // picker's Today fills the current minute; the change handler snaps that to end-of-day
+    expect(page).toContain("this.value.slice(0, 11) + '23:59'");
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();

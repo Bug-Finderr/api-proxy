@@ -200,7 +200,10 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<input type="datetime-local" id="expiresAt" name="expiresAt" />
+								<!-- the picker's Today fills the current minute; a time nobody chose means end-of-day -->
+								<input type="datetime-local" id="expiresAt" name="expiresAt"
+									hx-on:change="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) this.value = this.value.slice(0, 11) + '23:59'"
+								/>
 							</div>
 						</div>
 						<div class="checks">
