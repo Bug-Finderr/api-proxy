@@ -226,6 +226,27 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
+    // mutations swap their own fragments; a stale-list refresh trigger must not come back
+    expect(page).not.toContain("tokens-changed");
+    // click-to-copy delegation + tick feedback, and label is mandatory at the form level
+    expect(page).toContain("code.copy");
+    expect(page).toContain("navigator.clipboard.writeText");
+    expect(page).toContain('name="label" placeholder="alice-laptop" required');
+    // picker's Today fills the current minute; the change handler snaps that to end-of-day
+    expect(page).toContain("this.value.slice(0, 11) + '23:59'");
+    const table = await (
+      await call("/admin/api/tokens", { headers: { cookie } })
+    ).text();
+    expect(table).toContain('<tbody id="rows">');
+    expect(table).toContain('class="empty"');
+  });
+
+  it("rejects a missing or blank label", async () => {
+    const cookie = await login();
+    const res = await call("/admin/api/tokens", {
+      ...form({ label: "  ", providers: "openai" }, cookie),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("rejects a PUT that would strip every provider", async () => {
@@ -410,8 +431,14 @@ describe("admin input guards", () => {
     });
     const body = await res.text();
     expect(body).toContain("notice-test-token");
-    expect(body).toContain("copy token");
-    expect(body).toContain("https://proxy.example/v1");
+    // click-to-copy targets: token and every wiring URL carry the copy class
+    expect(body).toContain('<code class="mono copy">notice-test-token</code>');
+    expect(body).toContain(
+      '<code class="mono copy">https://proxy.example/v1</code>',
+    );
+    // the new row rides along out-of-band: KV list() lags writes, so a refresh can't show it
+    expect(body).toContain(`id="tok-${await sha256hex("notice-test-token")}"`);
+    expect(body).toContain('hx-swap-oob="afterbegin:#rows"');
 
     // a gemini-scoped token shows BOTH wirings: native GenAI (bare origin) + OpenAI-SDK compat
     const gem = await call("/admin/api/tokens", {
