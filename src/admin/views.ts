@@ -1,7 +1,6 @@
 import { html, raw } from "hono/html";
-import type { CoarseProvider, TokenMetadata } from "../types";
-
-type Row = TokenMetadata & { hash: string; lastUsed?: string };
+import type { TokenRow } from "../tokens";
+import type { CoarseProvider } from "../types";
 
 // Pinned and hash-verified: the admin page holds token-mint power and receives ADMIN_SECRET,
 // so a tampered CDN response must not execute. SRI computed from the npm-published artifact
@@ -40,6 +39,17 @@ td{padding:10px 8px;border-top:1px solid #20202a;vertical-align:middle}
 .danger{color:#f08a8a;border-color:#5c2a2a}
 `;
 
+const adminHead = () => html`
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>api-proxy admin</title>
+		<style>
+			${raw(STYLE)}
+		</style>
+		<script src="${HTMX}" integrity="${HTMX_SRI}" crossorigin="anonymous"></script>
+	</head>`;
+
 const providerPills = (providers: CoarseProvider[]) =>
   providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
@@ -50,7 +60,7 @@ const localTime = (iso?: string) =>
     ? html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`
     : "never";
 
-export const tokenRow = (r: Row) => {
+export const tokenRow = (r: TokenRow) => {
   const expired = !!r.expiresAt && Date.parse(r.expiresAt) <= Date.now();
   return html`
 	<tr id="tok-${r.hash}" class="${r.status === "disabled" || expired ? "disabled" : ""}">
@@ -83,7 +93,7 @@ export const tokenRow = (r: Row) => {
 	</tr>`;
 };
 
-export const tokenTable = (rows: Row[]) => html`
+export const tokenTable = (rows: TokenRow[]) => html`
 	<table>
 		<thead>
 			<tr>
@@ -102,7 +112,6 @@ export const tokenTable = (rows: Row[]) => html`
 	</table>
 `;
 
-// Per-provider wiring the consumer pastes next to the token (README "Use it" in one line).
 // Gemini gets both rows: the native GenAI SDK uses the bare origin, the OpenAI-SDK-compat
 // route needs /v1beta/openai.
 const WIRING: Record<CoarseProvider, [label: string, path: string][]> = {
@@ -130,23 +139,14 @@ export const createdNotice = (
 			copy token
 		</button>
 		<div class="muted" style="margin-top:8px">
-			Point the client at:
-			${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono">${origin}${path}</code></div>`))}
+			Point the client at: ${providers.flatMap((p) => WIRING[p].map(([label, path]) => html`<div>${label} <code class="mono">${origin}${path}</code></div>`))}
 		</div>
 	</div>
 `;
 
 export const loginPage = () => html`<!doctype html>
 	<html lang="en">
-		<head>
-			<meta charset="utf-8" />
-			<meta name="viewport" content="width=device-width,initial-scale=1" />
-			<title>api-proxy admin</title>
-			<style>
-				${raw(STYLE)}
-			</style>
-			<script src="${HTMX}" integrity="${HTMX_SRI}" crossorigin="anonymous"></script>
-		</head>
+		${adminHead()}
 		<body>
 			<div class="wrap">
 				<h1>api-proxy admin</h1>
@@ -172,15 +172,7 @@ export const loginPage = () => html`<!doctype html>
 
 export const dashboardPage = () => html`<!doctype html>
 	<html lang="en">
-		<head>
-			<meta charset="utf-8" />
-			<meta name="viewport" content="width=device-width,initial-scale=1" />
-			<title>api-proxy admin</title>
-			<style>
-				${raw(STYLE)}
-			</style>
-			<script src="${HTMX}" integrity="${HTMX_SRI}" crossorigin="anonymous"></script>
-		</head>
+		${adminHead()}
 		<body
 			hx-on::response-error="const x = event.detail.xhr; if (x.status === 401) { location.href = '/admin' } else { document.getElementById('flash').textContent = x.responseText || ('request failed (' + x.status + ')') }"
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"

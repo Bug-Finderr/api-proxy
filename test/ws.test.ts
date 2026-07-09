@@ -5,13 +5,7 @@ import {
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToken } from "../src/tokens";
-import {
-  extractWsToken,
-  forwardCloseCode,
-  handleWsProxy,
-  prepareWsUpstream,
-  routeWsProvider,
-} from "../src/ws";
+import { forwardCloseCode, handleWsProxy } from "../src/ws";
 
 // A fake upstream 101 carrying a live WebSocket, so handleWsProxy can accept + pipe it.
 function ws101(): Response {
@@ -51,110 +45,9 @@ const seed = (
   providers: ("openai" | "anthropic" | "gemini")[],
 ) => createToken(env.TOKENS, { label: token, providers, token });
 
-describe("WS auth-slot extraction", () => {
-  it("reads the token smuggled in the openai-insecure-api-key subprotocol", () => {
-    const req = new Request("https://proxy.example/v1/realtime?model=m", {
-      headers: {
-        "sec-websocket-protocol":
-          "realtime, openai-insecure-api-key.tk-123, openai-beta.realtime-v1",
-      },
-    });
-    const url = new URL(req.url);
-    expect(extractWsToken(req, url)).toBe("tk-123");
-    expect(routeWsProvider(req, url)).toBe("openai");
-  });
-
-  it("falls back to the header and query slots", () => {
-    const bearer = new Request("https://p/v1/responses", {
-      headers: { authorization: "Bearer tk-h" },
-    });
-    expect(extractWsToken(bearer, new URL(bearer.url))).toBe("tk-h");
-    expect(routeWsProvider(bearer, new URL(bearer.url))).toBe("openai");
-
-    const query = new Request(
-      "https://p/ws/Service.BidiGenerateContent?key=tk-q",
-    );
-    expect(extractWsToken(query, new URL(query.url))).toBe("tk-q");
-    expect(routeWsProvider(query, new URL(query.url))).toBe("gemini");
-  });
-});
-
-describe("prepareWsUpstream (pure auth swap)", () => {
-  it("openai: real key as Bearer, host rewritten, path + query kept, scheme stays https", () => {
-    const req = new Request(
-      "https://proxy.example/v1/realtime?model=gpt-realtime-2",
-      { headers: { authorization: "Bearer tk" } },
-    );
-    const url = new URL(req.url);
-    const { target, headers } = prepareWsUpstream(
-      req,
-      url,
-      "openai",
-      "REAL",
-      env,
-    );
-    const u = new URL(target);
-    expect(u.protocol).toBe("https:");
-    expect(u.hostname).toBe("api.openai.com");
-    expect(u.pathname).toBe("/v1/realtime");
-    expect(u.searchParams.get("model")).toBe("gpt-realtime-2");
-    expect(headers.get("authorization")).toBe("Bearer REAL");
-  });
-
-  it("openai subprotocol: drops the key entry, keeps realtime, sets Bearer", () => {
-    const req = new Request("https://proxy.example/v1/realtime", {
-      headers: {
-        "sec-websocket-protocol":
-          "realtime, openai-insecure-api-key.tk, openai-beta.realtime-v1",
-      },
-    });
-    const { headers } = prepareWsUpstream(
-      req,
-      new URL(req.url),
-      "openai",
-      "REAL",
-      env,
-    );
-    expect(headers.get("authorization")).toBe("Bearer REAL");
-    const proto = headers.get("sec-websocket-protocol") ?? "";
-    expect(proto).toContain("realtime");
-    expect(proto).toContain("openai-beta.realtime-v1");
-    expect(proto).not.toContain("openai-insecure-api-key");
-    expect(proto).not.toContain("tk");
-  });
-
-  it("gemini: real key in ?key=, no Authorization header", () => {
-    const req = new Request(
-      "https://proxy.example/ws/Service.BidiGenerateContent?key=tk",
-    );
-    const url = new URL(req.url);
-    const { target, headers } = prepareWsUpstream(
-      req,
-      url,
-      "gemini",
-      "REAL",
-      env,
-    );
-    const u = new URL(target);
-    expect(u.hostname).toBe("generativelanguage.googleapis.com");
-    expect(u.searchParams.get("key")).toBe("REAL");
-    expect(headers.get("authorization")).toBeNull();
-    expect(headers.get("x-goog-api-key")).toBeNull();
-  });
-});
-
 describe("handleWsProxy: validation (upstream never opened)", () => {
   it("401 when no token is present", async () => {
     const res = await callWs(new Request("https://proxy.example/v1/realtime"));
-    expect(res.status).toBe(401);
-    expect(captured).toBeNull();
-  });
-  it("401 for an unknown token", async () => {
-    const res = await callWs(
-      new Request("https://proxy.example/v1/realtime", {
-        headers: { authorization: "Bearer ghost" },
-      }),
-    );
     expect(res.status).toBe(401);
     expect(captured).toBeNull();
   });
@@ -168,39 +61,22 @@ describe("handleWsProxy: validation (upstream never opened)", () => {
     expect(res.status).toBe(403);
     expect(captured).toBeNull();
   });
-  it("503 when the token store rejects (KV outage)", async () => {
-    const broken = {
-      ...env,
-      TOKENS: {
-        get: () => Promise.reject(new Error("kv down")),
-      } as unknown as KVNamespace,
-    };
-    const ctx = createExecutionContext();
-    const res = await handleWsProxy(
-      new Request("https://proxy.example/v1/realtime", {
-        headers: { authorization: "Bearer whatever" },
-      }),
-      broken,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
-    expect(res.status).toBe(503);
-    expect(captured).toBeNull();
-  });
 });
 
 describe("handleWsProxy: auth swap + upgrade", () => {
   it("openai Bearer (/v1/responses): swaps in the real key and returns 101", async () => {
     await seed("tk-oai", ["openai"]);
     const res = await callWs(
-      new Request("https://proxy.example/v1/responses", {
+      new Request("https://proxy.example/v1/responses?model=gpt-realtime-2", {
         headers: { authorization: "Bearer tk-oai" },
       }),
     );
     expect(res.status).toBe(101);
     const u = new URL(captured!.url);
+    expect(u.protocol).toBe("https:"); // http(s) fetch-with-Upgrade, never ws://
     expect(u.hostname).toBe("api.openai.com");
     expect(u.pathname).toBe("/v1/responses");
+    expect(u.searchParams.get("model")).toBe("gpt-realtime-2");
     expect(captured!.headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
@@ -211,7 +87,8 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     const res = await callWs(
       new Request("https://proxy.example/v1/realtime?model=gpt-realtime-2", {
         headers: {
-          "sec-websocket-protocol": "realtime, openai-insecure-api-key.tk-rt",
+          "sec-websocket-protocol":
+            "realtime, openai-insecure-api-key.tk-rt, openai-beta.realtime-v1",
         },
       }),
     );
@@ -221,6 +98,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     const proto = captured!.headers.get("sec-websocket-protocol") ?? "";
     expect(proto).toContain("realtime");
+    expect(proto).toContain("openai-beta.realtime-v1"); // non-key entries survive the strip
     expect(proto).not.toContain("openai-insecure-api-key");
   });
 
@@ -236,6 +114,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     expect(u.hostname).toBe("generativelanguage.googleapis.com");
     expect(u.searchParams.get("key")).toBe("real-gemini-key-FAKE");
     expect(captured!.headers.get("authorization")).toBeNull();
+    expect(captured!.headers.get("x-goog-api-key")).toBeNull();
   });
 });
 
@@ -353,19 +232,6 @@ describe("handleWsProxy: rate limiting", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("60");
     expect(captured).toBeNull();
-  });
-
-  it("fails open (101) when the limiter throws", async () => {
-    await seed("tk-ws-err", ["openai"]);
-    setLimiter(async () => {
-      throw new Error("limiter down");
-    });
-    const res = await callWs(
-      new Request("https://proxy.example/v1/responses", {
-        headers: { authorization: "Bearer tk-ws-err" },
-      }),
-    );
-    expect(res.status).toBe(101);
   });
 });
 

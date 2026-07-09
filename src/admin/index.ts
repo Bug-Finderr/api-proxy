@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import {
   createToken,
   deleteToken,
@@ -6,7 +7,7 @@ import {
   sha256hex,
   updateToken,
 } from "../tokens";
-import type { CoarseProvider, Env } from "../types";
+import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
   dashboardPage,
@@ -17,60 +18,6 @@ import {
 
 const COOKIE = "cm_admin";
 const MAX_AGE = 86400; // 24h
-
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
-}
-
-async function sign(secret: string, data: string): Promise<string> {
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    await hmacKey(secret),
-    new TextEncoder().encode(data),
-  );
-  return [...new Uint8Array(sig)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function fromHex(h: string): Uint8Array | null {
-  if (h.length === 0 || h.length % 2 !== 0 || /[^0-9a-f]/i.test(h)) return null;
-  const out = new Uint8Array(h.length / 2);
-  for (let i = 0; i < out.length; i++)
-    out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
-
-async function isAuthed(req: Request, secret: string): Promise<boolean> {
-  const m = (req.headers.get("cookie") || "").match(
-    new RegExp(`${COOKIE}=([^;]+)`),
-  );
-  if (!m) return false;
-  const [ts, sig] = m[1].split(".");
-  const t = Number(ts);
-  if (!ts || !sig || !Number.isFinite(t) || Date.now() / 1000 - t > MAX_AGE)
-    return false;
-  const sigBytes = fromHex(sig);
-  if (!sigBytes) return false;
-  // crypto.subtle.verify is constant-time; never compare HMACs with ===.
-  return crypto.subtle.verify(
-    "HMAC",
-    await hmacKey(secret),
-    sigBytes,
-    new TextEncoder().encode(ts),
-  );
-}
-
-async function makeCookie(secret: string): Promise<string> {
-  const ts = String(Math.floor(Date.now() / 1000));
-  return `${COOKIE}=${ts}.${await sign(secret, ts)}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=${MAX_AGE}`;
-}
 
 const isHash = (h: string) => /^[0-9a-f]{64}$/.test(h);
 
@@ -96,9 +43,7 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
 
-// Login is the only unguarded route (registered before the auth guard). Throttled per client
-// IP through a dedicated low-rate limiter (fail-open, like the proxy's) and compared in
-// constant time: an internet-facing password prompt must not be a brute-force or timing oracle.
+// Login is the only unguarded route (registered before the auth guard).
 app.post("/login", async (c) => {
   let allowed = true;
   try {
@@ -117,27 +62,40 @@ app.post("/login", async (c) => {
     console.warn("admin login failed");
     return c.text("invalid password", 401);
   }
-  return c.body("ok", 200, {
-    "Set-Cookie": await makeCookie(c.env.ADMIN_SECRET),
-    "HX-Redirect": "/admin",
-  });
+  // The signed value is the issue time: the 24h expiry holds server-side even if the
+  // client ignores Max-Age.
+  await setSignedCookie(
+    c,
+    COOKIE,
+    String(Math.floor(Date.now() / 1000)),
+    c.env.ADMIN_SECRET,
+    {
+      path: "/admin",
+      httpOnly: true,
+      secure: true,
+      sameSite: "Strict",
+      maxAge: MAX_AGE,
+    },
+  );
+  return c.text("ok", 200, { "HX-Redirect": "/admin" });
 });
 
-// Auth guard for everything below.
+// Auth guard for everything below. getSignedCookie verifies the HMAC in constant time;
+// tampered gives false, absent undefined, and a non-numeric timestamp fails the age check.
 app.use("/*", async (c, next) => {
-  if (await isAuthed(c.req.raw, c.env.ADMIN_SECRET)) return next();
+  const ts = await getSignedCookie(c, c.env.ADMIN_SECRET, COOKIE);
+  if (typeof ts === "string" && Date.now() / 1000 - Number(ts) <= MAX_AGE)
+    return next();
   if (c.req.path.startsWith("/admin/api/")) return c.text("unauthorized", 401);
   return c.html(loginPage());
 });
 
 app.get("/", (c) => c.html(dashboardPage()));
 
-app.get("/logout", (c) =>
-  c.body(null, 302, {
-    Location: "/admin",
-    "Set-Cookie": `${COOKIE}=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
-  }),
-);
+app.get("/logout", (c) => {
+  deleteCookie(c, COOKIE, { path: "/admin" });
+  return c.body(null, 302, { Location: "/admin" });
+});
 
 app.get("/api/tokens", async (c) =>
   c.html(tokenTable(await listTokens(c.env.TOKENS))),
@@ -150,8 +108,7 @@ app.post("/api/tokens", async (c) => {
   if (!providers.length) return c.text("pick at least one provider", 400);
   const custom = String(fd.get("token") || "").trim();
   if (custom) {
-    // The token is the only secret between the internet and the real keys: no weak custom
-    // tokens, and no silent overwrite (overwriting could resurrect a disabled token).
+    // No weak custom tokens, and no silent overwrite: it could resurrect a disabled token.
     if (custom.length < 12)
       return c.text("custom token too short (min 12 chars)", 400);
     if (await c.env.TOKENS.get(await sha256hex(custom)))
@@ -184,11 +141,8 @@ app.put("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
   const fd = await c.req.formData();
-  const patch: Partial<{
-    label: string;
-    status: "active" | "disabled";
-    providers: CoarseProvider[];
-  }> = {};
+  const patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">> =
+    {};
   if (fd.has("label")) patch.label = String(fd.get("label"));
   if (fd.has("status")) {
     const s = String(fd.get("status"));

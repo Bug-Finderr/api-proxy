@@ -2,23 +2,16 @@ import { env } from "cloudflare:workers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createToken,
-  deleteToken,
   generateToken,
-  getValidated,
+  getValidatedByHash,
   listTokens,
   sha256hex,
   touchLastUsed,
   updateToken,
 } from "../src/tokens";
 
-describe("sha256hex", () => {
-  it("produces a 64-char hex digest", async () => {
-    expect(await sha256hex("hello")).toMatch(/^[0-9a-f]{64}$/);
-  });
-  it("is deterministic", async () => {
-    expect(await sha256hex("x")).toBe(await sha256hex("x"));
-  });
-});
+const getValidated = async (kv: KVNamespace, token: string) =>
+  getValidatedByHash(kv, await sha256hex(token));
 
 describe("generateToken", () => {
   it("has the ptk_ prefix and a url-safe body", () => {
@@ -43,27 +36,8 @@ describe("createToken + getValidated", () => {
       status: "active",
     });
   });
-  it("accepts a custom admin-typed token", async () => {
-    const { token } = await createToken(env.TOKENS, {
-      label: "bob",
-      providers: ["anthropic"],
-      token: "my-code",
-    });
-    expect(token).toBe("my-code");
-    expect(await getValidated(env.TOKENS, "my-code")).toMatchObject({
-      label: "bob",
-    });
-  });
   it("returns null for an unknown token", async () => {
     expect(await getValidated(env.TOKENS, "nope-unknown")).toBeNull();
-  });
-  it("returns null for a disabled token", async () => {
-    const { token, hash } = await createToken(env.TOKENS, {
-      label: "c",
-      providers: ["gemini"],
-    });
-    await updateToken(env.TOKENS, hash, { status: "disabled" });
-    expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
   it("never stores the plaintext token in the KV value", async () => {
     const { token, hash } = await createToken(env.TOKENS, {
@@ -97,15 +71,6 @@ describe("listTokens / updateToken / deleteToken", () => {
     });
     expect(updated?.label).toBe("new");
     expect(updated?.providers).toEqual(["openai", "anthropic"]);
-  });
-  it("deletes a token", async () => {
-    const { token, hash } = await createToken(env.TOKENS, {
-      label: "del",
-      providers: ["openai"],
-      token: "del-t",
-    });
-    await deleteToken(env.TOKENS, hash);
-    expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
 });
 

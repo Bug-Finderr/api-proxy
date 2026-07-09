@@ -24,7 +24,7 @@ flowchart LR
 ```
 
 - The **WebSocket upgrade** is checked first so a realtime client never falls through to the HTTP branch.
-- The **admin sub-app** is wrapped in `try/catch` (→ 500) so an admin bug can never crash the proxy branch.
+- The **admin sub-app** leans on Hono's default error handler (`console.error` + 500), so an admin bug still answers cleanly and never touches the proxy branch.
 - The **HTTP hot path** is framework-free (`src/proxy.ts` must never import Hono - it is pure functions plus a `fetch` handler).
 
 ## 3. Request flow (proxy hot path)
@@ -106,7 +106,7 @@ type TokenMetadata = {
 - **Tokens** are opaque: `ptk_` + 32 url-safe chars (24 random bytes). Custom admin-typed tokens are allowed; validation is by hash of the full string.
 - **Validation** (`getValidatedByHash`): returns the record only if `status === "active"` AND, when `expiresAt` is set, it parses to a future timestamp - malformed or past expiry is rejected **fail-closed**. Not KV `expirationTtl` - why: [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
 - **`lastUsed`** lives in a separate `<hash>:lu` key, stamped fire-and-forget at most once per UTC day per token **per isolate**. Why the side key: [`proxy-token-security.md`](learnings/proxy-token-security.md); why the once-a-day throttle: [`kv-free-tier-write-quota.md`](learnings/kv-free-tier-write-quota.md).
-- **Lifecycle:** `createToken`, `listTokens` (paginates KV, skips `:lu` keys), `updateToken` (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s), so revoke and new-token visibility can lag.
+- **Lifecycle:** `createToken`, `listTokens` (one `kv.list` page, skips `:lu` keys), `updateToken` (label / providers / status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s), so revoke and new-token visibility can lag.
 
 ```mermaid
 stateDiagram-v2
@@ -202,7 +202,7 @@ Caveats: the rate limit gates the **connection**, not each frame (one upgrade = 
 
 Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `hono/html` plus **HTMX 2.x** loaded from a CDN with a pinned version **and an SRI hash** (`integrity` + `crossorigin`): the page holds token-mint power and receives `ADMIN_SECRET`, so a tampered CDN response must refuse to execute. No authored client JS beyond a handful of inline `hx-on` attributes and the copy-button `onclick`; nothing in the worker bundle but markup + attributes. The login form also carries `method="post"` so a no-htmx fallback submit can never default to GET and leak the password into the URL.
 
-- **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` is rate-limited per client IP (dedicated `LOGIN_LIMITER`, 10/60s, fail-open) and compared in constant time (`crypto.subtle.timingSafeEqual` over SHA-256 digests); failures are logged. Success sets an HMAC-SHA256-signed cookie `cm_admin=<ts>.<sig>` (`Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; the signature check uses constant-time `crypto.subtle.verify`, and tampered/expired cookies are pinned by negative-path tests.
+- **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` is rate-limited per client IP (dedicated `LOGIN_LIMITER`, 10/60s, fail-open) and compared in constant time (`crypto.subtle.timingSafeEqual` over SHA-256 digests); failures are logged. Success sets a signed cookie via `hono/cookie` (`setSignedCookie`: HMAC-SHA-256 over the issue timestamp, `Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; `getSignedCookie` verifies in constant time (`crypto.subtle.verify`) and the guard re-checks the 24h age server-side, so a client ignoring `Max-Age` gains nothing. Tampered/expired cookies are pinned by negative-path tests.
 - **CRUD:** HTMX-driven over `/admin/api/tokens` - list (`GET`), create (`POST`; parses label, provider checkboxes, an optional `datetime-local` expiry the form converts to UTC ISO in the browser, custom-or-generated token), edit / enable-disable (`PUT`), delete (`DELETE`). `:hash` params are validated as 64-hex. Guards: no providers → 400 (no silent openai default), custom tokens need ≥ 12 chars, creating over an existing hash → 409 (an overwrite could resurrect a disabled token), and `status` is whitelisted (a malformed value must not re-enable a token).
 - **UI:** an add-token card (label, token, **Expires (optional)**, provider checkboxes) and a token table (label, last-4, provider pills, status, **Expires**, last-used, disable/delete). The created plaintext is shown once with a **copy button and the per-provider base URLs** ready to hand out; expired tokens render `expired` and dim the row. The list refreshes on load, on the `tokens-changed` event, and **every 120 s while the tab is visible** - each refresh costs a `kv.list`, and the free tier's 1,000 lists/day (account-wide) rules out tighter polling.
 - **Errors surface:** a body-level `hx-on::response-error` writes failures into a flash div (htmx swaps nothing on non-2xx by default - previously a wrong password or an expired session silently no-opped), and a 401 mid-session bounces back to the login page.

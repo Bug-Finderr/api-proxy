@@ -1,6 +1,7 @@
 // The proxy hot-path. ZERO framework deps - pure functions + a fetch handler.
 // MUST NOT import Hono or any admin code.
 
+import { DurableObject } from "cloudflare:workers";
 import { getValidatedByHash, sha256hex, touchLastUsed } from "./tokens";
 import { coarse, type Env, type Provider, type TokenMetadata } from "./types";
 import { rewriteToUpstream } from "./upstreams";
@@ -44,7 +45,6 @@ export function stripAuthSlots(headers: Headers, url: URL): void {
   url.searchParams.delete("key");
 }
 
-/** Strip every inbound auth slot, then set exactly one header with the real key. Security linchpin. */
 export function swapAuth(
   headers: Headers,
   url: URL,
@@ -66,7 +66,6 @@ export function swapAuth(
   }
 }
 
-/** The real upstream key for a provider. */
 export function realKeyFor(provider: Provider, env: Env): string {
   switch (coarse(provider)) {
     case "openai":
@@ -78,15 +77,10 @@ export function realKeyFor(provider: Provider, env: Env): string {
   }
 }
 
-function errorResponse(status: number, error: string): Response {
-  return new Response(JSON.stringify({ error }), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+const errorResponse = (status: number, error: string) =>
+  Response.json({ error }, { status });
 
-/** The validate -> scope -> rate-limit spine shared by the HTTP and WS pipelines.
- *  Returns the hash + metadata on success, or the status + message the caller should answer. */
+/** The validate -> scope -> rate-limit spine shared by the HTTP and WS pipelines. */
 export async function authorize(
   env: Env,
   token: string,
@@ -125,13 +119,21 @@ const EGRESS_POOL = 8;
 
 /** OpenAI 403s requests that egress from an unsupported region (e.g. the Hong Kong colo). */
 export async function isGeoBlock(res: Response): Promise<boolean> {
-  if (res.status !== 403) return false;
-  try {
-    return (await res.clone().text()).includes(
-      "unsupported_country_region_territory",
-    );
-  } catch {
-    return false;
+  return (
+    res.status === 403 &&
+    (await res.clone().text()).includes("unsupported_country_region_territory")
+  );
+}
+
+// Region-pinned egress relay. OpenAI geo-blocks requests that egress from some Cloudflare
+// colos (e.g. Hong Kong) with 403 unsupported_country_region_territory. A Worker's fetch()
+// egresses from whatever colo the invocation runs in, and that is fixed per invocation, so an
+// in-invocation retry cannot escape a bad colo. Routing the request to this Durable Object via
+// locationHint:"wnam" makes the object run in North America; its outbound fetch() then egresses
+// from an OpenAI-supported region. The real key never leaves Cloudflare.
+export class UsEgress extends DurableObject<Env> {
+  override fetch(request: Request): Promise<Response> {
+    return fetch(request);
   }
 }
 
@@ -176,7 +178,6 @@ function corsPreflight(req: Request): Response {
   return withCors(res, req);
 }
 
-/** Top-level proxy entry: CORS preflight, then reflect Origin onto every response. */
 export async function handleProxy(
   req: Request,
   env: Env,
@@ -186,7 +187,6 @@ export async function handleProxy(
   return withCors(await proxyRequest(req, env, ctx), req);
 }
 
-/** Validate the proxy token, swap in the real key, forward to the upstream, stream back. */
 async function proxyRequest(
   req: Request,
   env: Env,
@@ -207,8 +207,7 @@ async function proxyRequest(
   const realKey = realKeyFor(provider, env);
   rewriteToUpstream(url, provider, env);
   const headers = new Headers(req.headers);
-  // swapAuth also strips ?key= for every provider (the URL analogue of the header slots):
-  // a dual-slot client must not leak the proxy token into upstream request logs.
+  // swapAuth also mutates url: it strips ?key= so the proxy token never reaches upstream logs.
   swapAuth(headers, url, provider, realKey);
   const target = url.toString();
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
@@ -216,18 +215,14 @@ async function proxyRequest(
   let upstream: Response;
   try {
     if (coarse(provider) === "openai") {
-      // Buffer the body so the request can be re-issued through the egress DO. The edge
-      // colo this invocation egresses from is fixed, so an in-invocation retry is useless;
-      // only re-issuing from a region-pinned DO escapes a geo-blocked colo.
+      // Buffer the body so a geo-403 can be re-issued through the egress DO (UsEgress above).
       const body = hasBody ? await req.arrayBuffer() : undefined;
-      upstream = await fetch(
-        new Request(target, { method: req.method, headers, body }),
-      );
+      const replay = () =>
+        new Request(target, { method: req.method, headers, body });
+      upstream = await fetch(replay());
       if (await isGeoBlock(upstream)) {
         console.warn("openai geo-403; retrying via the NA egress DO");
-        upstream = await egressStub(env).fetch(
-          new Request(target, { method: req.method, headers, body }),
-        );
+        upstream = await egressStub(env).fetch(replay());
       }
     } else {
       upstream = await fetch(

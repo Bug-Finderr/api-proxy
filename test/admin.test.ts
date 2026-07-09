@@ -3,9 +3,13 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { getValidated, sha256hex } from "../src/tokens";
+import { getValidatedByHash, sha256hex } from "../src/tokens";
+
+const getValidated = async (kv: KVNamespace, token: string) =>
+  getValidatedByHash(kv, await sha256hex(token));
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctx = createExecutionContext();
@@ -18,9 +22,12 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-const form = (data: Record<string, string>) => ({
+const form = (data: Record<string, string>, cookie?: string) => ({
   method: "POST",
-  headers: { "content-type": "application/x-www-form-urlencoded" },
+  headers: {
+    "content-type": "application/x-www-form-urlencoded",
+    ...(cookie && { cookie }),
+  },
   body: new URLSearchParams(data).toString(),
 });
 
@@ -64,12 +71,14 @@ describe("admin token CRUD", () => {
   it("creates a custom token that the proxy then accepts", async () => {
     const cookie = await login();
     const res = await call("/admin/api/tokens", {
-      ...form({
-        label: "alice",
-        providers: "openai",
-        token: "compat-xyz-token",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "alice",
+          providers: "openai",
+          token: "compat-xyz-token",
+        },
+        cookie,
+      ),
     });
     expect(res.status).toBe(200);
     expect(await getValidated(env.TOKENS, "compat-xyz-token")).toMatchObject({
@@ -81,12 +90,14 @@ describe("admin token CRUD", () => {
   it("lists tokens by label", async () => {
     const cookie = await login();
     await call("/admin/api/tokens", {
-      ...form({
-        label: "bob",
-        providers: "anthropic",
-        token: "list-bob-token",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "bob",
+          providers: "anthropic",
+          token: "list-bob-token",
+        },
+        cookie,
+      ),
     });
     const res = await call("/admin/api/tokens", { headers: { cookie } });
     expect(await res.text()).toContain("bob");
@@ -95,8 +106,10 @@ describe("admin token CRUD", () => {
   it("disables a token so the proxy rejects it", async () => {
     const cookie = await login();
     await call("/admin/api/tokens", {
-      ...form({ label: "c", providers: "gemini", token: "to-disable-token" }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        { label: "c", providers: "gemini", token: "to-disable-token" },
+        cookie,
+      ),
     });
     const hash = await sha256hex("to-disable-token");
     const upd = await call(`/admin/api/tokens/${hash}`, {
@@ -111,8 +124,10 @@ describe("admin token CRUD", () => {
   it("deletes a token", async () => {
     const cookie = await login();
     await call("/admin/api/tokens", {
-      ...form({ label: "d", providers: "openai", token: "to-delete-token" }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        { label: "d", providers: "openai", token: "to-delete-token" },
+        cookie,
+      ),
     });
     const hash = await sha256hex("to-delete-token");
     const del = await call(`/admin/api/tokens/${hash}`, {
@@ -126,13 +141,15 @@ describe("admin token CRUD", () => {
   it("stores a UTC ISO expiresAt and 400s an unparseable one", async () => {
     const cookie = await login();
     const ok = await call("/admin/api/tokens", {
-      ...form({
-        label: "exp",
-        providers: "openai",
-        token: "with-expiry-token",
-        expiresAt: "2030-01-01T00:00:00.000Z",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "exp",
+          providers: "openai",
+          token: "with-expiry-token",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        },
+        cookie,
+      ),
     });
     expect(ok.status).toBe(200);
     expect(await getValidated(env.TOKENS, "with-expiry-token")).toMatchObject({
@@ -148,26 +165,30 @@ describe("admin token CRUD", () => {
     expect(table).toContain("2030-01-01 00:00 UTC");
 
     const bad = await call("/admin/api/tokens", {
-      ...form({
-        label: "bad-exp",
-        providers: "openai",
-        token: "bad-expiry-token",
-        expiresAt: "not-a-date",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "bad-exp",
+          providers: "openai",
+          token: "bad-expiry-token",
+          expiresAt: "not-a-date",
+        },
+        cookie,
+      ),
     });
     expect(bad.status).toBe(400);
 
     // An offset-less value (raw API call bypassing the form) is rejected - it would be
     // read in the runtime's local timezone, not the admin's.
     const bare = await call("/admin/api/tokens", {
-      ...form({
-        label: "bare-exp",
-        providers: "openai",
-        token: "bare-expiry-token",
-        expiresAt: "2030-01-01T00:00",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "bare-exp",
+          providers: "openai",
+          token: "bare-expiry-token",
+          expiresAt: "2030-01-01T00:00",
+        },
+        cookie,
+      ),
     });
     expect(bare.status).toBe(400);
   });
@@ -222,29 +243,14 @@ describe("admin token CRUD", () => {
 });
 
 describe("admin session verification", () => {
-  const hmacHex = async (data: string): Promise<string> => {
-    const key = await crypto.subtle.importKey(
-      "raw",
-      new TextEncoder().encode("test-admin-secret"),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
-    const sig = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      new TextEncoder().encode(data),
-    );
-    return [...new Uint8Array(sig)]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  };
+  // Mint with the same hono/utils/cookie helper the worker verifies against:
+  // wire format is cm_admin=encodeURIComponent("<ts>.<base64 HMAC-SHA-256>").
+  const mint = (ts: string) =>
+    serializeSigned("cm_admin", ts, "test-admin-secret");
 
   it("accepts a hand-minted valid cookie (sanity for the negative cases)", async () => {
-    const ts = String(Math.floor(Date.now() / 1000));
-    const res = await call("/admin/api/tokens", {
-      headers: { cookie: `cm_admin=${ts}.${await hmacHex(ts)}` },
-    });
+    const cookie = await mint(String(Math.floor(Date.now() / 1000)));
+    const res = await call("/admin/api/tokens", { headers: { cookie } });
     expect(res.status).toBe(200);
   });
   it("rejects a garbage cookie", async () => {
@@ -253,20 +259,20 @@ describe("admin session verification", () => {
     });
     expect(res.status).toBe(401);
   });
-  it("rejects a valid signature with one flipped hex digit", async () => {
-    const ts = String(Math.floor(Date.now() / 1000));
-    const sig = await hmacHex(ts);
-    const flipped = (sig[0] === "0" ? "1" : "0") + sig.slice(1);
+  it("rejects a tampered timestamp carrying a signature for a different value", async () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const value = decodeURIComponent(
+      (await mint(String(ts))).slice("cm_admin=".length),
+    );
+    const sig = value.slice(value.lastIndexOf(".") + 1);
     const res = await call("/admin/api/tokens", {
-      headers: { cookie: `cm_admin=${ts}.${flipped}` },
+      headers: { cookie: `cm_admin=${encodeURIComponent(`${ts + 1}.${sig}`)}` },
     });
     expect(res.status).toBe(401);
   });
   it("rejects a correctly signed but expired (>24h) timestamp", async () => {
-    const ts = String(Math.floor(Date.now() / 1000) - 86_401);
-    const res = await call("/admin/api/tokens", {
-      headers: { cookie: `cm_admin=${ts}.${await hmacHex(ts)}` },
-    });
+    const cookie = await mint(String(Math.floor(Date.now() / 1000) - 86_401));
+    const res = await call("/admin/api/tokens", { headers: { cookie } });
     expect(res.status).toBe(401);
   });
 });
@@ -302,8 +308,7 @@ describe("admin input guards", () => {
   it("400s creation with no providers instead of silently scoping to openai", async () => {
     const cookie = await login();
     const res = await call("/admin/api/tokens", {
-      ...form({ label: "np", token: "no-providers-token" }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form({ label: "np", token: "no-providers-token" }, cookie),
     });
     expect(res.status).toBe(400);
     expect(await getValidated(env.TOKENS, "no-providers-token")).toBeNull();
@@ -311,25 +316,27 @@ describe("admin input guards", () => {
 
   it("400s a short custom token and 409s a duplicate (no silent overwrite)", async () => {
     const cookie = await login();
-    const hdrs = {
-      "content-type": "application/x-www-form-urlencoded",
-      cookie,
-    };
-    const short = await call("/admin/api/tokens", {
-      ...form({ label: "s", providers: "openai", token: "tiny" }),
-      headers: hdrs,
-    });
+    const short = await call(
+      "/admin/api/tokens",
+      form({ label: "s", providers: "openai", token: "tiny" }, cookie),
+    );
     expect(short.status).toBe(400);
 
-    const first = await call("/admin/api/tokens", {
-      ...form({ label: "dup1", providers: "openai", token: "duplicate-token" }),
-      headers: hdrs,
-    });
+    const first = await call(
+      "/admin/api/tokens",
+      form(
+        { label: "dup1", providers: "openai", token: "duplicate-token" },
+        cookie,
+      ),
+    );
     expect(first.status).toBe(200);
-    const dup = await call("/admin/api/tokens", {
-      ...form({ label: "dup2", providers: "openai", token: "duplicate-token" }),
-      headers: hdrs,
-    });
+    const dup = await call(
+      "/admin/api/tokens",
+      form(
+        { label: "dup2", providers: "openai", token: "duplicate-token" },
+        cookie,
+      ),
+    );
     expect(dup.status).toBe(409);
     // the original record survives untouched
     expect(await getValidated(env.TOKENS, "duplicate-token")).toMatchObject({
@@ -343,10 +350,13 @@ describe("admin input guards", () => {
       "content-type": "application/x-www-form-urlencoded",
       cookie,
     };
-    await call("/admin/api/tokens", {
-      ...form({ label: "w", providers: "openai", token: "whitelist-token" }),
-      headers: hdrs,
-    });
+    await call(
+      "/admin/api/tokens",
+      form(
+        { label: "w", providers: "openai", token: "whitelist-token" },
+        cookie,
+      ),
+    );
     const hash = await sha256hex("whitelist-token");
     await call(`/admin/api/tokens/${hash}`, {
       method: "PUT",
@@ -365,12 +375,14 @@ describe("admin input guards", () => {
   it("created notice carries the copy button and per-provider base URLs", async () => {
     const cookie = await login();
     const res = await call("/admin/api/tokens", {
-      ...form({
-        label: "n",
-        providers: "openai",
-        token: "notice-test-token",
-      }),
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+      ...form(
+        {
+          label: "n",
+          providers: "openai",
+          token: "notice-test-token",
+        },
+        cookie,
+      ),
     });
     const body = await res.text();
     expect(body).toContain("notice-test-token");
