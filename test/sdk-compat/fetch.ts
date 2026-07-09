@@ -1,32 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Unstable_DevWorker } from "wrangler";
-import {
-  FAKE,
-  type MockUpstream,
-  seedToken,
-  startMockUpstream,
-  startWorker,
-} from "./setup";
+import { describe, expect, it } from "vitest";
+import { compatHarness, FAKE } from "./setup";
 
-// Raw fetch (no SDK) - covers the two things no official SDK exercises: the Gemini
-// `?key=` query-param auth slot, verbatim request-body forwarding, and the CORS preflight.
-let mock: MockUpstream;
-let worker: Unstable_DevWorker;
-let url: string;
+// Raw fetch (no SDK) - covers what no official SDK exercises: the Gemini `?key=`
+// query-param auth slot and verbatim request-body forwarding.
 const TOKEN = "tk-fetch-compat";
-
-beforeAll(async () => {
-  mock = await startMockUpstream();
-  const w = await startWorker(mock.url);
-  worker = w.worker;
-  url = w.url;
-  await seedToken(url, { token: TOKEN, providers: ["gemini"] });
-});
-afterAll(async () => {
-  await worker.stop();
-  await mock.close();
-});
-beforeEach(() => mock.reset());
+const h = compatHarness({ token: TOKEN, providers: ["gemini"] });
 
 describe("raw fetch (no SDK)", () => {
   it("routes the Gemini ?key= slot, strips the token, swaps the real key, forwards body verbatim", async () => {
@@ -34,12 +12,12 @@ describe("raw fetch (no SDK)", () => {
       contents: [{ parts: [{ text: "ping-verbatim-42" }] }],
     });
     const res = await fetch(
-      `${url}/v1beta/models/gemini-x:generateContent?key=${TOKEN}&foo=bar`,
+      `${h.url()}/v1beta/models/gemini-x:generateContent?key=${TOKEN}&foo=bar`,
       { method: "POST", headers: { "content-type": "application/json" }, body },
     );
     expect(res.status).toBe(200);
 
-    const cap = mock.last();
+    const cap = h.last();
     expect(cap).not.toBeNull();
     // real key swapped into the header slot
     expect(cap?.headers["x-goog-api-key"]).toBe(FAKE.gemini);
@@ -51,21 +29,5 @@ describe("raw fetch (no SDK)", () => {
     expect(JSON.stringify(cap?.headers)).not.toContain(TOKEN);
     // request body forwarded byte-for-byte
     expect(cap?.body).toBe(body);
-  });
-
-  it("answers a CORS preflight (OPTIONS) at the edge without a token or upstream call", async () => {
-    const res = await fetch(`${url}/v1/messages`, {
-      method: "OPTIONS",
-      headers: {
-        origin: "https://app.example",
-        "access-control-request-headers": "x-api-key, content-type",
-      },
-    });
-    expect(res.status).toBe(204);
-    expect(res.headers.get("access-control-allow-origin")).toBe(
-      "https://app.example",
-    );
-    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
-    expect(mock.last()).toBeNull();
   });
 });

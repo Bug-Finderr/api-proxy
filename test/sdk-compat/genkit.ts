@@ -1,43 +1,19 @@
 import { googleAI } from "@genkit-ai/google-genai";
 import { genkit } from "genkit";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Unstable_DevWorker } from "wrangler";
-import {
-  FAKE,
-  type MockUpstream,
-  seedToken,
-  startMockUpstream,
-  startWorker,
-} from "./setup";
+import { describe, expect, it } from "vitest";
+import { compatHarness, FAKE } from "./setup";
 
-let mock: MockUpstream;
-let worker: Unstable_DevWorker;
-let baseURL: string;
 const TOKEN = "compat-genkit-token";
-
-beforeAll(async () => {
-  mock = await startMockUpstream();
-  const w = await startWorker(mock.url);
-  worker = w.worker;
-  baseURL = w.url;
-  await seedToken(baseURL, {
-    token: TOKEN,
-    providers: ["gemini"],
-    label: "genkit",
-  });
+const h = compatHarness({
+  token: TOKEN,
+  providers: ["gemini"],
+  label: "genkit",
 });
-
-afterAll(async () => {
-  await worker?.stop();
-  await mock?.close();
-});
-
-beforeEach(() => mock.reset());
 
 // googleAI({ baseUrl }) is the bare host; the plugin builds `${baseUrl}/v1beta/models/<model>:...`
 // and sends the key in the x-goog-api-key header.
 const ai = () =>
-  genkit({ plugins: [googleAI({ apiKey: TOKEN, baseUrl: baseURL })] });
+  genkit({ plugins: [googleAI({ apiKey: TOKEN, baseUrl: h.url() })] });
 
 describe("genkit (@genkit-ai/google-genai) compatibility", () => {
   it("forwards ai.generate with x-goog-api-key swapped and the token absent", async () => {
@@ -46,7 +22,7 @@ describe("genkit (@genkit-ai/google-genai) compatibility", () => {
       prompt: "hi",
     });
     expect(r.text).toContain("hi");
-    const cap = mock.last();
+    const cap = h.last();
     expect(cap?.path).toContain(
       "/v1beta/models/gemini-2.5-flash:generateContent",
     );

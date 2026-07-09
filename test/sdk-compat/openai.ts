@@ -1,39 +1,15 @@
 import OpenAI from "openai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Unstable_DevWorker } from "wrangler";
-import {
-  FAKE,
-  type MockUpstream,
-  seedToken,
-  startMockUpstream,
-  startWorker,
-} from "./setup";
+import { describe, expect, it } from "vitest";
+import { compatHarness, FAKE } from "./setup";
 
-let mock: MockUpstream;
-let worker: Unstable_DevWorker;
-let baseURL: string;
 const TOKEN = "compat-openai-token";
-
-beforeAll(async () => {
-  mock = await startMockUpstream();
-  const w = await startWorker(mock.url);
-  worker = w.worker;
-  baseURL = w.url;
-  await seedToken(baseURL, {
-    token: TOKEN,
-    providers: ["openai"],
-    label: "openai",
-  });
+const h = compatHarness({
+  token: TOKEN,
+  providers: ["openai"],
+  label: "openai",
 });
 
-afterAll(async () => {
-  await worker?.stop();
-  await mock?.close();
-});
-
-beforeEach(() => mock.reset());
-
-const client = () => new OpenAI({ baseURL: `${baseURL}/v1`, apiKey: TOKEN });
+const client = () => new OpenAI({ baseURL: `${h.url()}/v1`, apiKey: TOKEN });
 
 describe("openai SDK compatibility", () => {
   it("forwards a chat completion with the real key swapped in and the token absent", async () => {
@@ -42,7 +18,7 @@ describe("openai SDK compatibility", () => {
       messages: [{ role: "user", content: "hi" }],
     });
     expect(r).toBeTruthy();
-    const cap = mock.last();
+    const cap = h.last();
     expect(cap?.path).toBe("/v1/chat/completions");
     expect(cap?.headers.authorization).toBe(`Bearer ${FAKE.openai}`);
     expect(JSON.stringify(cap?.headers)).not.toContain(TOKEN);
@@ -58,6 +34,6 @@ describe("openai SDK compatibility", () => {
     for await (const chunk of stream)
       text += chunk.choices?.[0]?.delta?.content ?? "";
     expect(text).toContain("hi");
-    expect(mock.last()?.headers.authorization).toBe(`Bearer ${FAKE.openai}`);
+    expect(h.last()?.headers.authorization).toBe(`Bearer ${FAKE.openai}`);
   });
 });
