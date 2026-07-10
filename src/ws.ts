@@ -1,14 +1,12 @@
-import {
-  authorize,
-  egressStub,
-  identify,
-  isGeoBlock,
-  realKeyFor,
-  stripAuthSlots,
-} from "./proxy";
+import { authorize, identify, stripAuthSlots } from "./auth";
 import { touchLastUsed } from "./tokens";
 import { coarse, type Env, type Provider } from "./types";
-import { rewriteToUpstream } from "./upstreams";
+import {
+  egressStub,
+  isGeoBlock,
+  realKeyFor,
+  rewriteToUpstream,
+} from "./upstreams";
 
 // Browser WebSockets cannot set headers; OpenAI smuggles the key as a Sec-WebSocket-Protocol entry.
 const OPENAI_KEY_SUBPROTOCOL = "openai-insecure-api-key.";

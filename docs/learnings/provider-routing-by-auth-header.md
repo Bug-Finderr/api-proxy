@@ -6,7 +6,7 @@ One consolidated base URL has to transparently serve OpenAI, Anthropic, and Gemi
 
 ## What we found
 
-Each SDK already announces its provider by *which auth slot it populates* - no path prefix or custom header needed. The slot-to-provider mapping lives in architecture §4; the check order matters and is (`src/proxy.ts` `identify`):
+Each SDK already announces its provider by *which auth slot it populates* - no path prefix or custom header needed. The slot-to-provider mapping lives in architecture §4; the check order matters and is (`src/auth.ts` `identify`):
 
 ```mermaid
 flowchart TD

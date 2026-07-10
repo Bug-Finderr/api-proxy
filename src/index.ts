@@ -3,7 +3,7 @@ import { handleProxy } from "./proxy";
 import type { Env } from "./types";
 import { handleWsProxy } from "./ws";
 
-export { UsEgress } from "./proxy";
+export { UsEgress } from "./upstreams";
 
 export default {
   async fetch(
