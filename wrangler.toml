@@ -19,7 +19,7 @@ binding = "TOKENS"
 id = "1b212581e15144fb9f931b221a8cc5cd"
 
 # Region-pinned egress relay (SQLite Durable Object, free plan). OpenAI calls that hit a
-# geo-blocked egress colo are re-issued through this DO via locationHint:"wnam" (North America).
+# geo-blocked egress colo are re-issued through this DO via the US jurisdiction namespace.
 [[durable_objects.bindings]]
 name = "US_EGRESS"
 class_name = "UsEgress"

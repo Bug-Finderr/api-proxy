@@ -7,8 +7,8 @@ import {
   createToken,
   deleteToken,
   listTokens,
+  setTokenStatus,
   sha256hex,
-  updateToken,
 } from "../tokens";
 import type { CoarseProvider, Env } from "../types";
 import {
@@ -153,7 +153,7 @@ app.put("/api/tokens/:hash", async (c) => {
   // Whitelist, don't default: a malformed value must not silently re-enable a token.
   if (status !== "active" && status !== "disabled")
     return c.text("bad status", 400);
-  const meta = await updateToken(c.env.TOKENS, hash, { status });
+  const meta = await setTokenStatus(c.env.TOKENS, hash, status);
   if (!meta) return c.text("not found", 404);
   return c.html(tokenRow({ hash, ...meta }));
 });

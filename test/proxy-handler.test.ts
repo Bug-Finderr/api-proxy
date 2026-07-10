@@ -5,7 +5,7 @@ import {
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { createToken, sha256hex, updateToken } from "../src/tokens";
+import { createToken, setTokenStatus, sha256hex } from "../src/tokens";
 import { fakeEgress, geo403, seed, setLimiter } from "./helpers";
 
 let captured: Request | null;
@@ -157,7 +157,7 @@ describe("auth failures (upstream never called)", () => {
       providers: ["openai"],
       token: "tk-disabled",
     });
-    await updateToken(env.TOKENS, hash, { status: "disabled" });
+    await setTokenStatus(env.TOKENS, hash, "disabled");
     const res = await call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
@@ -304,6 +304,7 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
   it("retries through the egress DO when OpenAI returns a geo-403, with the real key", async () => {
     await seed("tk-geo", ["openai"]);
     fake = fakeEgress();
+    vi.spyOn(Math, "random").mockReturnValue(0.999999);
     fetchSpy.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         captured = input instanceof Request ? input : new Request(input, init);
@@ -325,6 +326,8 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: "via-egress" });
+    expect(fake.jurisdictions).toEqual(["us"]);
+    expect(fake.names).toEqual(["oa-egress-7"]);
     expect(fake.calls.length).toBe(1);
     const sent = fake.calls[0];
     expect(new URL(sent.url).hostname).toBe("api.openai.com");
@@ -371,19 +374,23 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
 });
 
 describe("SSE passthrough", () => {
-  it("streams text/event-stream chunks through without buffering", async () => {
+  it("returns the first chunk while the upstream's second chunk is gated", async () => {
     await createToken(env.TOKENS, {
       label: "sse",
       providers: ["openai"],
       token: "tk-sse",
     });
+    let releaseSecond = () => {};
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
     fetchSpy.mockImplementation(async () => {
       const enc = new TextEncoder();
       const stream = new ReadableStream({
-        start(c) {
+        async start(c) {
           c.enqueue(enc.encode("data: a\n\n"));
-          c.enqueue(enc.encode("data: b\n\n"));
-          c.enqueue(enc.encode("data: [DONE]\n\n"));
+          await secondGate;
+          c.enqueue(enc.encode("data: b\n\ndata: [DONE]\n\n"));
           c.close();
         },
       });
@@ -400,9 +407,28 @@ describe("SSE passthrough", () => {
       }),
     );
     expect(res.headers.get("content-type")).toBe("text/event-stream");
-    const text = await res.text();
-    expect(text).toContain("data: a");
-    expect(text).toContain("[DONE]");
+    const reader = res.body!.getReader();
+    const decode = (value?: Uint8Array) => new TextDecoder().decode(value);
+    try {
+      const first = await reader.read();
+      expect(decode(first.value)).toBe("data: a\n\n");
+
+      const secondRead = reader.read();
+      expect(
+        await Promise.race([
+          secondRead.then(() => "second" as const),
+          Promise.resolve("still-gated" as const),
+        ]),
+      ).toBe("still-gated");
+
+      releaseSecond();
+      const second = await secondRead;
+      expect(decode(second.value)).toBe("data: b\n\ndata: [DONE]\n\n");
+      expect((await reader.read()).done).toBe(true);
+    } finally {
+      releaseSecond();
+      await reader.cancel();
+    }
   });
 });
 

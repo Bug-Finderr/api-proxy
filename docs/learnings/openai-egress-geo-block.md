@@ -24,4 +24,4 @@ flowchart LR
 
 ## The decision we keep
 
-A North-America-pinned Durable Object as a **fallback, not the default path** (mechanics + flow diagram: architecture §9). Why this shape: key never leaves Cloudflare, free (SQLite DO), good-colo calls stay fast, other providers untouched. Post-fix stress test: 25/25 `200`, DO egress verified US (DFW/LAX/DEN/SJC/SEA), streaming survives. Another provider showing the same geo-403 → extend the `coarse(provider) === "openai"` branch.
+A US-jurisdiction Durable Object as a **fallback, not the default path** (mechanics + flow diagram: architecture §9). Why this shape: key never leaves Cloudflare, free (SQLite DO), good-colo calls stay fast, other providers untouched. Post-fix stress test: 25/25 `200`, DO egress verified US (DFW/LAX/DEN/SJC/SEA), streaming survives. Another provider showing the same geo-403 → extend the `coarse(provider) === "openai"` branch.

@@ -182,6 +182,8 @@ export const dashboardPage = () => html`<!doctype html>
 				<div class="card">
 					<h2>Add token</h2>
 					<form
+						method="post"
+						action="/admin/api/tokens"
 						hx-post="/admin/api/tokens"
 						hx-target="#created"
 						hx-swap="innerHTML"

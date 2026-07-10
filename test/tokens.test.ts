@@ -4,9 +4,9 @@ import {
   createToken,
   generateToken,
   listTokens,
+  setTokenStatus,
   sha256hex,
   touchLastUsed,
-  updateToken,
 } from "../src/tokens";
 import { getValidated } from "./helpers";
 
@@ -46,7 +46,7 @@ describe("createToken + getValidated", () => {
   });
 });
 
-describe("listTokens / updateToken / deleteToken", () => {
+describe("listTokens / setTokenStatus / deleteToken", () => {
   it("lists created tokens by hash with metadata", async () => {
     await createToken(env.TOKENS, {
       label: "L1",
@@ -55,6 +55,23 @@ describe("listTokens / updateToken / deleteToken", () => {
     });
     const row = (await listTokens(env.TOKENS)).find((r) => r.label === "L1");
     expect(row?.hash).toBe(await sha256hex("list-t1"));
+  });
+
+  it("lists every token when one KV page contains more than 50 records", async () => {
+    const created = await Promise.all(
+      Array.from({ length: 51 }, (_, i) =>
+        createToken(env.TOKENS, {
+          label: `bulk-${i}`,
+          providers: ["openai"],
+          token: `bulk-list-token-${i}`,
+        }),
+      ),
+    );
+
+    const listedHashes = new Set(
+      (await listTokens(env.TOKENS)).map((r) => r.hash),
+    );
+    for (const { hash } of created) expect(listedHashes.has(hash)).toBe(true);
   });
 });
 
@@ -109,7 +126,7 @@ describe("touchLastUsed", () => {
       providers: ["openai"],
       token: "to-revoke",
     });
-    await updateToken(env.TOKENS, hash, { status: "disabled" });
+    await setTokenStatus(env.TOKENS, hash, "disabled");
     await touchLastUsed(env.TOKENS, hash);
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });

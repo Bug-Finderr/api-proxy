@@ -110,8 +110,8 @@ export async function isGeoBlock(res: Response): Promise<boolean> {
 }
 
 // OpenAI geo-403s some colos (e.g. HKG); a Worker's egress colo is fixed per invocation,
-// so a retry cannot escape it. This DO is pinned to NA via locationHint, so its fetch()
-// egresses from a supported region. The real key never leaves Cloudflare.
+// so a retry cannot escape it. The US-jurisdiction DO fetches from a supported region.
+// The real key never leaves Cloudflare.
 export class UsEgress extends DurableObject<Env> {
   override fetch(request: Request): Promise<Response> {
     return fetch(request);
@@ -119,9 +119,8 @@ export class UsEgress extends DurableObject<Env> {
 }
 
 export function egressStub(env: Env): DurableObjectStub {
-  return env.US_EGRESS.getByName(
+  return env.US_EGRESS.jurisdiction("us").getByName(
     `oa-egress-${Math.floor(Math.random() * EGRESS_POOL)}`,
-    { locationHint: "wnam" },
   );
 }
 
@@ -198,7 +197,7 @@ async function proxyRequest(
         new Request(target, { method: req.method, headers, body });
       upstream = await fetch(replay());
       if (await isGeoBlock(upstream)) {
-        console.warn("openai geo-403; retrying via the NA egress DO");
+        console.warn("openai geo-403; retrying via the US egress DO");
         upstream = await egressStub(env).fetch(replay());
       }
     } else {

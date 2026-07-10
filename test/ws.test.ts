@@ -161,6 +161,7 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       }),
     );
     expect(res.status).toBe(101);
+    expect(fake.jurisdictions).toEqual(["us"]);
     expect(fake.calls.length).toBe(1);
     expect(new URL(fake.calls[0].url).hostname).toBe("api.openai.com");
     expect(fake.calls[0].headers.get("authorization")).toBe(

@@ -106,7 +106,7 @@ type TokenMetadata = {
 - **Tokens** are opaque: `ptk_` + 32 url-safe chars (24 random bytes). Custom admin-typed tokens are allowed; validation is by hash of the full string.
 - **Validation** (`getValidatedByHash`): returns the record only if `status === "active"` AND, when `expiresAt` is set, it parses to a future timestamp - malformed or past expiry is rejected **fail-closed**. Not KV `expirationTtl` - why: [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
 - **`lastUsed`** lives in a separate `<hash>:lu` key, stamped fire-and-forget at most once per UTC day per token **per isolate**. Why the side key: [`proxy-token-security.md`](learnings/proxy-token-security.md); why the once-a-day throttle: [`kv-free-tier-write-quota.md`](learnings/kv-free-tier-write-quota.md).
-- **Lifecycle:** `createToken`, `listTokens` (one `kv.list` page, skips `:lu` keys), `updateToken` (status), `deleteToken` (record + `:lu`). KV is eventually consistent (~60s), so revoke and new-token visibility can lag.
+- **Lifecycle:** `createToken`, `listTokens` (one `kv.list` page, skips `:lu` keys), `setTokenStatus`, `deleteToken` (record + `:lu`). KV is eventually consistent (~60s), so revoke and new-token visibility can lag.
 
 ```mermaid
 stateDiagram-v2
@@ -152,17 +152,17 @@ sequenceDiagram
     C->>G: upload bytes straight to that URL (skips Worker + 100MB cap)
 ```
 
-## 9. OpenAI geo-403 egress (North-America-pinned Durable Object)
+## 9. OpenAI geo-403 egress (US-jurisdiction Durable Object)
 
 OpenAI 403s `unsupported_country_region_territory` when a request egresses from an unsupported colo (e.g. Hong Kong). A Worker's `fetch()` egresses from the colo the invocation runs in, fixed per invocation, so an in-invocation retry can't escape a bad colo.
 
-The fix is a fallback: try the fast edge `fetch()` first (requests that egress from a good colo return immediately); **only on the geo-403**, re-issue the same request through the `UsEgress` SQLite Durable Object pinned to North America (`locationHint: "wnam"`). Running in a US colo, its `fetch()` egresses from a supported region and succeeds. Only the OpenAI branch buffers the body (to replay it to the DO); a pool of 8 named DO ids (`oa-egress-<N>`, picked at random) spreads load. Anthropic and Gemini are untouched, and the real key never leaves Cloudflare. Discovery story + dead ends: [`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
+The fix is a fallback: try the fast edge `fetch()` first (requests that egress from a good colo return immediately); **only on the geo-403**, re-issue the same request through the `UsEgress` SQLite Durable Object selected from `env.US_EGRESS.jurisdiction("us")`. Running in a US colo, its `fetch()` egresses from a supported region and succeeds. Only the OpenAI branch buffers the body (to replay it to the DO); a pool of 8 named DO ids (`oa-egress-<N>`, picked at random) spreads load. Anthropic and Gemini are untouched, and the real key never leaves Cloudflare. Discovery story + dead ends: [`openai-egress-geo-block.md`](learnings/openai-egress-geo-block.md).
 
 ```mermaid
 flowchart TD
     A[OpenAI request] --> B["direct edge fetch()"]
     B -- "200 (fast path, ~60%)" --> R[return]
-    B -- "geo-403" --> D["re-issue through the US-pinned DO<br/>(locationHint: wnam)"]
+    B -- "geo-403" --> D["re-issue through the<br/>US-jurisdiction DO"]
     D --> E["DO runs in a US colo, so fetch() egresses US"]
     E -- "OpenAI 200" --> R
 ```
@@ -216,7 +216,7 @@ Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `
 | Binding | Kind | Purpose |
 |---|---|---|
 | `TOKENS` | KV namespace | token store (by `SHA-256`) + `:lu` last-used keys |
-| `US_EGRESS` | SQLite Durable Object (`UsEgress`) | NA-pinned egress fallback for OpenAI (HTTP + wss) |
+| `US_EGRESS` | SQLite Durable Object (`UsEgress`) | US-jurisdiction egress fallback for OpenAI (HTTP + wss) |
 | `RATE_LIMITER` | Rate Limit | per-token RPM ceiling (100/60s) |
 | `LOGIN_LIMITER` | Rate Limit | per-IP `/admin/login` throttle (10/60s, separate ruleset) |
 

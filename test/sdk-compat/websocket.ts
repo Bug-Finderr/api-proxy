@@ -15,16 +15,19 @@ interface Handshake {
 interface WsMock {
   url: string;
   last(): Handshake | null;
+  current(): WebSocket | null;
   reset(): void;
   close(): Promise<void>;
 }
 
 async function startWsMockUpstream(): Promise<WsMock> {
   let last: Handshake | null = null;
+  let current: WebSocket | null = null;
   const server = http.createServer();
   const wss = new WebSocketServer({ server });
   wss.on("connection", (socket, req) => {
     last = { headers: req.headers, url: req.url ?? "" };
+    current = socket;
     socket.on("message", (data, isBinary) =>
       socket.send(data, { binary: isBinary }),
     );
@@ -34,11 +37,18 @@ async function startWsMockUpstream(): Promise<WsMock> {
   return {
     url: `http://127.0.0.1:${port}`,
     last: () => last,
+    current: () => current,
     reset: () => {
       last = null;
+      current?.terminate();
+      current = null;
     },
-    close: () =>
-      new Promise<void>((res) => wss.close(() => server.close(() => res()))),
+    close: () => {
+      current?.terminate();
+      return new Promise<void>((res) =>
+        wss.close(() => server.close(() => res())),
+      );
+    },
   };
 }
 
@@ -67,6 +77,7 @@ afterAll(async () => {
 beforeEach(() => mock.reset());
 
 const ping = JSON.stringify({ type: "ping" });
+const TIMEOUT_MS = 15_000;
 
 function roundtrip(
   path: string,
@@ -78,7 +89,7 @@ function roundtrip(
     const timer = setTimeout(() => {
       c.terminate();
       reject(new Error("ws round-trip timed out"));
-    }, 15_000);
+    }, TIMEOUT_MS);
     c.on("open", () => c.send(payload));
     c.on("message", (data, isBinary) => {
       clearTimeout(timer);
@@ -89,6 +100,37 @@ function roundtrip(
       clearTimeout(timer);
       reject(e);
     });
+  });
+}
+
+function closeRoundtrip(
+  source: "client" | "upstream",
+  code: number,
+  reason: string,
+): Promise<{ code: number; reason: string }> {
+  const client = new WebSocket(`${wsBase}/v1/responses`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  let timer: ReturnType<typeof setTimeout>;
+  return new Promise<{ code: number; reason: string }>((resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("ws close propagation timed out")),
+      TIMEOUT_MS,
+    );
+    client.once("error", reject);
+    client.once("open", () => {
+      const upstream = mock.current();
+      if (!upstream) return reject(new Error("mock upstream socket missing"));
+      const destination = source === "client" ? upstream : client;
+      destination.once("close", (receivedCode, receivedReason) => {
+        resolve({ code: receivedCode, reason: receivedReason.toString() });
+      });
+      (source === "client" ? client : upstream).close(code, reason);
+    });
+  }).finally(() => {
+    clearTimeout(timer);
+    client.terminate();
+    mock.reset();
   });
 }
 
@@ -126,6 +168,16 @@ describe("WebSocket proxy (end-to-end)", () => {
     });
     expect(isBinary).toBe(true);
     expect(Buffer.from(data).equals(Buffer.from(payload))).toBe(true);
+  });
+
+  it.each([
+    ["upstream", 4101, "upstream finished"],
+    ["client", 4102, "client finished"],
+  ] as const)("propagates a %s close code and reason", async (source, code, reason) => {
+    expect(await closeRoundtrip(source, code, reason)).toEqual({
+      code,
+      reason,
+    });
   });
 
   it("rejects an unknown token at the handshake (upstream never opened)", async () => {

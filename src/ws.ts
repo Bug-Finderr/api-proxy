@@ -128,7 +128,7 @@ export async function handleWsProxy(
     upstreamRes = await fetch(target, { headers });
     if (coarse(id.provider) === "openai" && (await isGeoBlock(upstreamRes))) {
       console.warn(
-        "openai geo-403 on ws upgrade; retrying via the NA egress DO",
+        "openai geo-403 on ws upgrade; retrying via the US egress DO",
       );
       upstreamRes = await egressStub(env).fetch(
         new Request(target, { headers }),
@@ -147,8 +147,8 @@ export async function handleWsProxy(
   // Force ArrayBuffer: this compatibility_date delivers Blob frames by default, which send() rejects (silent drop).
   upstream.binaryType = "arraybuffer";
   server.binaryType = "arraybuffer";
-  upstream.accept();
-  server.accept();
+  upstream.accept({ allowHalfOpen: true });
+  server.accept({ allowHalfOpen: true });
   pump(server, upstream);
   pump(upstream, server);
 

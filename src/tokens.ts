@@ -64,8 +64,13 @@ export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   const { keys } = await kv.list();
   const hashes = keys.map((k) => k.name).filter((n) => !n.endsWith(":lu"));
   if (!hashes.length) return [];
-  // Bulk get caps at 100 keys = 50 tokens, consistent with the single-page list() above.
-  const vals = await kv.get(hashes.flatMap((h) => [h, luKey(h)]));
+  const vals = new Map<string, string | null>();
+  for (let i = 0; i < hashes.length; i += 50) {
+    const batch = await kv.get(
+      hashes.slice(i, i + 50).flatMap((h) => [h, luKey(h)]),
+    );
+    for (const [key, value] of batch) vals.set(key, value);
+  }
   return hashes.flatMap((hash) => {
     const meta = parseMeta(vals.get(hash) ?? null);
     return meta
@@ -74,14 +79,14 @@ export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   });
 }
 
-export async function updateToken(
+export async function setTokenStatus(
   kv: KVNamespace,
   hash: string,
-  patch: Pick<TokenMetadata, "status">,
+  status: TokenMetadata["status"],
 ): Promise<TokenMetadata | null> {
   const meta = parseMeta(await kv.get(hash));
   if (!meta) return null;
-  const updated = { ...meta, ...patch };
+  const updated = { ...meta, status };
   await kv.put(hash, JSON.stringify(updated));
   return updated;
 }

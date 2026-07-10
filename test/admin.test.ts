@@ -223,6 +223,11 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
+    const addForm = page.match(
+      /<form[^>]*hx-post="\/admin\/api\/tokens"[^>]*>/,
+    )?.[0];
+    expect(addForm).toContain('method="post"');
+    expect(addForm).toContain('action="/admin/api/tokens"');
     // mutations swap their own fragments; a stale-list refresh trigger must not come back
     expect(page).not.toContain("tokens-changed");
     expect(page).toContain("code.copy");
