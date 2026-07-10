@@ -2,13 +2,12 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { unstable_dev } from "wrangler";
 import {
-  ADMIN_SECRET,
   FAKE,
   seedToken,
   startMockUpstream,
-} from "./sdk-compat/mock.mjs";
+  startWorker,
+} from "./sdk-compat/mock.mts";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const py =
@@ -33,27 +32,7 @@ const TOKEN = "tk-py-compat-1";
 const PER_FILE_TIMEOUT_MS = 90_000;
 
 const mock = await startMockUpstream();
-const worker = await unstable_dev("src/index.ts", {
-  config: "wrangler.toml",
-  local: true,
-  vars: {
-    OPENAI_API_KEY: FAKE.openai,
-    ANTHROPIC_API_KEY: FAKE.anthropic,
-    GEMINI_API_KEY: FAKE.gemini,
-    ADMIN_SECRET,
-    OPENAI_UPSTREAM: mock.url,
-    ANTHROPIC_UPSTREAM: mock.url,
-    GEMINI_UPSTREAM: mock.url,
-  },
-  experimental: { disableExperimentalWarning: true },
-});
-// Normalize the bind address: unstable_dev can report 0.0.0.0 / :: (which Node's fetch
-// tolerates but Python's HTTP clients do not, hanging on their long default timeout).
-const host =
-  !worker.address || worker.address === "0.0.0.0" || worker.address === "::"
-    ? "127.0.0.1"
-    : worker.address;
-const workerUrl = `http://${host}:${worker.port}`;
+const { worker, url: workerUrl } = await startWorker(mock.url);
 console.log(`[py] worker ${workerUrl}  mock ${mock.url}`);
 
 let failed = 0;
@@ -71,8 +50,7 @@ try {
     PROXY_FAKE_ANTHROPIC: FAKE.anthropic,
     PROXY_FAKE_GEMINI: FAKE.gemini,
   };
-  // The seeded proxy token is the ONLY key a client should use; strip any real provider key from
-  // the child env so a client that reads a key from the environment can't bypass the token path.
+  // strip real provider keys so an SDK reading env vars can't bypass the token path
   for (const k of [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -84,9 +62,7 @@ try {
   for (const file of pyFiles) {
     mock.reset();
     console.log(`[py] ${file}`);
-    // Async spawn (NOT spawnSync): the mock lives in this event loop, and spawnSync would freeze
-    // it for the whole child run - so the worker could never reach the mock and every test would
-    // hang. Await exit via a Promise, with a hard timeout that kills a stuck child.
+    // async spawn: spawnSync would freeze this event loop and the mock with it, hanging every child
     const code = await new Promise((resolve) => {
       const child = spawn(py, [join(dir, file)], { stdio: "inherit", env });
       const timer = setTimeout(() => {

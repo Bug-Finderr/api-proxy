@@ -1,8 +1,7 @@
 name = "api-proxy"
 main = "src/index.ts"
-# Bumping past 2026-03-17 flips WS binaryType default (websocket_standard_binary_type); the
-# tier-2 binary-frame test plus the explicit binaryType pin in ws.ts cover that transition.
-compatibility_date = "2025-01-01"
+# Keep in sync with vitest.config.ts (tier-1 miniflare does not read this file; tier-2 unstable_dev does).
+compatibility_date = "2026-07-01"
 workers_dev = true
 preview_urls = false
 

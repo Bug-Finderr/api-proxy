@@ -2,10 +2,8 @@ import { html, raw } from "hono/html";
 import type { TokenRow } from "../tokens";
 import type { CoarseProvider } from "../types";
 
-// Pinned and hash-verified: the admin page holds token-mint power and receives ADMIN_SECRET,
-// so a tampered CDN response must not execute. SRI computed from the npm-published artifact
-// (unpkg, jsdelivr, and the registry tarball all serve this exact file). HTMX and HTMX_SRI
-// must change together - the admin markup test pins the exact hash.
+// SRI-pinned: a tampered CDN script must not run on the page that holds ADMIN_SECRET.
+// HTMX and HTMX_SRI change together; the markup test pins the hash.
 export const HTMX = "https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js";
 const HTMX_SRI =
   "sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V";
@@ -58,8 +56,7 @@ const adminHead = () => html`
 const providerPills = (providers: CoarseProvider[]) =>
   providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
-// <time datetime="ISO"> with a labeled-UTC fallback; the dashboard's after-settle handler
-// localizes them. lastUsed stamps once per UTC day, so it reads "first use of that UTC day".
+// Rendered text is only a fallback; the dashboard's after-settle handler localizes <time> elements.
 const localTime = (iso?: string) =>
   iso
     ? html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`
@@ -118,8 +115,6 @@ export const tokenTable = (rows: TokenRow[]) => html`
 	</table>
 `;
 
-// Gemini gets both rows: the native GenAI SDK uses the bare origin, the OpenAI-SDK-compat
-// route needs /v1beta/openai.
 const WIRING: Record<CoarseProvider, [label: string, path: string][]> = {
   openai: [["openai", "/v1"]],
   anthropic: [["anthropic", ""]],
@@ -157,8 +152,7 @@ export const loginPage = () => html`<!doctype html>
 						hx-swap="none"
 						hx-on::response-error="document.getElementById('login-error').textContent = event.detail.xhr.responseText || 'login failed'"
 					>
-						<!-- method="post" is the no-htmx fallback: a native submit must never
-						     default to GET and leak the password into the URL/history. -->
+						<!-- method="post": a no-htmx native submit must not default to GET and leak the password into the URL. -->
 						<label for="password">Admin password</label>
 						<input type="password" id="password" name="password" autocomplete="off" />
 						<div style="margin-top:12px"><button type="submit">Sign in</button></div>
@@ -205,11 +199,9 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<!-- The picker's Today fills the current minute (a time nobody chose) -> snap to end-of-day.
-								     On input (live), not change (fires only at close, clobbering a picked time). An open popup
-								     never re-reads the value (Chromium snapshots it once at open), so blur() tears it down
-								     synchronously and showPicker() reopens it on 23:59 in the same tick. In-popup clicks grant
-								     the page transient activation in Chromium only - elsewhere the catch leaves it closed. -->
+								<!-- Today fills the current minute -> snap to 23:59. On input, not change (change fires only
+								     at close, clobbering picked times). blur()+showPicker() forces Chromium's open popup to
+								     re-read the value; elsewhere showPicker throws and the catch leaves it closed. -->
 								<input type="datetime-local" id="expiresAt" name="expiresAt"
 									hx-on:input="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) { this.value = this.value.slice(0, 11) + '23:59'; this.blur(); try { this.showPicker() } catch {} }"
 								/>

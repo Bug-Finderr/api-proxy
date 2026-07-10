@@ -3,6 +3,9 @@
   "type": "module",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "test:unit": "vitest run --config vitest.config.ts",

@@ -9,8 +9,7 @@ const h = compatHarness({
   label: "langchain-openai",
 });
 
-// `configuration` is passed straight to the underlying `openai` SDK; a plain model name
-// (not gpt-5.x-pro) with no tools stays on /v1/chat/completions, not /v1/responses.
+// a plain model name with no tools stays on /v1/chat/completions, not /v1/responses
 const client = () =>
   new ChatOpenAI({
     model: "gpt-x",

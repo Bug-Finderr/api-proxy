@@ -3,6 +3,6 @@
 pre-commit:
   commands:
     check:
-      glob: "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc,css}"
+      glob: "*.{js,ts,cjs,mjs,mts,d.cts,d.mts,jsx,tsx,json,jsonc,css}"
       run: nubx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
       stage_fixed: true

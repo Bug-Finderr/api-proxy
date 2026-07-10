@@ -1,4 +1,4 @@
-// KV-backed token store. Tokens are stored by SHA-256(token); the plaintext is shown once at creation and never persisted.
+// Tokens are keyed by SHA-256(token); the plaintext is never persisted.
 import type { CoarseProvider, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
@@ -16,15 +16,15 @@ export function generateToken(): string {
 export interface CreateInput {
   label: string;
   providers: CoarseProvider[];
-  token?: string; // admin-typed; otherwise generated
-  expiresAt?: string; // ISO (UTC); absent = never expires
+  token?: string;
+  expiresAt?: string;
 }
 
 export async function createToken(
   kv: KVNamespace,
   input: CreateInput,
 ): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
-  const token = input.token?.trim() || generateToken();
+  const token = input.token || generateToken();
   const hash = await sha256hex(token);
   const meta: TokenMetadata = {
     label: input.label,
@@ -32,14 +32,13 @@ export async function createToken(
     providers: input.providers,
     status: "active",
     createdAt: new Date().toISOString(),
-    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    expiresAt: input.expiresAt,
   };
   await kv.put(hash, JSON.stringify(meta));
   return { token, hash, meta };
 }
 
-// lastUsed lives in its own key so stamping it never rewrites (and never resurrects)
-// the token record that the admin may be concurrently disabling.
+// Own key so stamping never rewrites (or resurrects) a record the admin is concurrently disabling.
 const luKey = (hash: string) => `${hash}:lu`;
 
 export type TokenRow = TokenMetadata & { hash: string; lastUsed?: string };
@@ -64,24 +63,21 @@ export async function getValidatedByHash(
 export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   const { keys } = await kv.list();
   const hashes = keys.map((k) => k.name).filter((n) => !n.endsWith(":lu"));
-
-  const rows = await Promise.all(
-    hashes.map(async (hash): Promise<TokenRow | null> => {
-      const [raw, lastUsed] = await Promise.all([
-        kv.get(hash),
-        kv.get(luKey(hash)),
-      ]);
-      const meta = parseMeta(raw);
-      return meta ? { hash, ...meta, lastUsed: lastUsed ?? undefined } : null;
-    }),
-  );
-  return rows.filter((r): r is TokenRow => r !== null);
+  if (!hashes.length) return [];
+  // Bulk get caps at 100 keys = 50 tokens, consistent with the single-page list() above.
+  const vals = await kv.get(hashes.flatMap((h) => [h, luKey(h)]));
+  return hashes.flatMap((hash) => {
+    const meta = parseMeta(vals.get(hash) ?? null);
+    return meta
+      ? [{ hash, ...meta, lastUsed: vals.get(luKey(hash)) ?? undefined }]
+      : [];
+  });
 }
 
 export async function updateToken(
   kv: KVNamespace,
   hash: string,
-  patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">>,
+  patch: Pick<TokenMetadata, "status">,
 ): Promise<TokenMetadata | null> {
   const meta = parseMeta(await kv.get(hash));
   if (!meta) return null;

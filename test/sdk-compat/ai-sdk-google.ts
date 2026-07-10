@@ -11,7 +11,6 @@ const h = compatHarness({
 });
 
 // @ai-sdk/google appends /models/<model>:generateContent, so baseURL must include /v1beta.
-// It sends the key in the x-goog-api-key header (not ?key=), so it routes to the gemini slot.
 const model = () =>
   createGoogleGenerativeAI({ baseURL: `${h.url()}/v1beta`, apiKey: TOKEN })(
     "gemini-2.5-flash",

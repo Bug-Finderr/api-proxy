@@ -7,7 +7,7 @@ const DEFAULTS = {
   gemini: "https://generativelanguage.googleapis.com",
 } as const;
 
-export function upstreamBase(provider: Provider, env: Env): string {
+function upstreamBase(provider: Provider, env: Env): string {
   switch (coarse(provider)) {
     case "openai":
       return env.OPENAI_UPSTREAM || DEFAULTS.openai;

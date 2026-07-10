@@ -4,19 +4,13 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createToken } from "../src/tokens";
 import { forwardCloseCode, handleWsProxy } from "../src/ws";
+import { fakeEgress, geo403, seed, setLimiter } from "./helpers";
 
-// A fake upstream 101 carrying a live WebSocket, so handleWsProxy can accept + pipe it.
 function ws101(): Response {
   const [upstream] = Object.values(new WebSocketPair());
   return new Response(null, { status: 101, webSocket: upstream });
 }
-const geo403 = () =>
-  new Response(
-    JSON.stringify({ error: { code: "unsupported_country_region_territory" } }),
-    { status: 403 },
-  );
 
 let captured: Request | null;
 let upstreamReply: () => Response;
@@ -39,11 +33,6 @@ async function callWs(req: Request): Promise<Response> {
   await waitOnExecutionContext(ctx);
   return res;
 }
-
-const seed = (
-  token: string,
-  providers: ("openai" | "anthropic" | "gemini")[],
-) => createToken(env.TOKENS, { label: token, providers, token });
 
 describe("handleWsProxy: validation (upstream never opened)", () => {
   it("401 when no token is present", async () => {
@@ -98,7 +87,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     const proto = captured!.headers.get("sec-websocket-protocol") ?? "";
     expect(proto).toContain("realtime");
-    expect(proto).toContain("openai-beta.realtime-v1"); // non-key entries survive the strip
+    expect(proto).toContain("openai-beta.realtime-v1");
     expect(proto).not.toContain("openai-insecure-api-key");
   });
 
@@ -153,35 +142,18 @@ describe("handleWsProxy: security invariant", () => {
         },
       }),
     );
-    // Scan the ENTIRE outbound surface (every header entry + the URL), like the HTTP invariant.
     const blob = [captured!.url, ...[...captured!.headers].flat()].join("|");
     expect(blob).not.toContain("SECRET-WS");
   });
 });
 
 describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
-  const realEgress = env.US_EGRESS;
-  let egressCalls: Request[];
-  afterEach(() => {
-    (env as { US_EGRESS: typeof realEgress }).US_EGRESS = realEgress;
-  });
-  function fakeEgress(reply: () => Response) {
-    egressCalls = [];
-    const stub = {
-      fetch: async (r: Request) => {
-        egressCalls.push(r);
-        return reply();
-      },
-    };
-    (env as { US_EGRESS: unknown }).US_EGRESS = {
-      idFromName: () => ({}),
-      get: () => stub,
-    };
-  }
+  let fake: ReturnType<typeof fakeEgress> | undefined;
+  afterEach(() => fake?.restore());
 
   it("retries the upgrade through the egress DO on a geo-403, with the real key", async () => {
     await seed("tk-geo", ["openai"]);
-    fakeEgress(ws101);
+    fake = fakeEgress(ws101);
     upstreamReply = geo403;
     const res = await callWs(
       new Request("https://proxy.example/v1/responses", {
@@ -189,16 +161,16 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       }),
     );
     expect(res.status).toBe(101);
-    expect(egressCalls.length).toBe(1);
-    expect(new URL(egressCalls[0].url).hostname).toBe("api.openai.com");
-    expect(egressCalls[0].headers.get("authorization")).toBe(
+    expect(fake.calls.length).toBe(1);
+    expect(new URL(fake.calls[0].url).hostname).toBe("api.openai.com");
+    expect(fake.calls[0].headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
   });
 
   it("never routes gemini through the egress DO (403 surfaces straight through)", async () => {
     await seed("tk-gem2", ["gemini"]);
-    fakeEgress(ws101);
+    fake = fakeEgress(ws101);
     upstreamReply = geo403;
     const res = await callWs(
       new Request(
@@ -206,24 +178,17 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       ),
     );
     expect(res.status).toBe(403);
-    expect(egressCalls.length).toBe(0);
+    expect(fake.calls.length).toBe(0);
   });
 });
 
 describe("handleWsProxy: rate limiting", () => {
-  const real = (env as { RATE_LIMITER?: unknown }).RATE_LIMITER;
-  afterEach(() => {
-    (env as { RATE_LIMITER?: unknown }).RATE_LIMITER = real;
-  });
-  const setLimiter = (
-    limit: (o: { key: string }) => Promise<{ success: boolean }>,
-  ) => {
-    (env as { RATE_LIMITER: unknown }).RATE_LIMITER = { limit };
-  };
+  let restore: (() => void) | undefined;
+  afterEach(() => restore?.());
 
   it("429s with Retry-After when denied, without opening the upstream", async () => {
     await seed("tk-ws-rl", ["openai"]);
-    setLimiter(async () => ({ success: false }));
+    restore = setLimiter(async () => ({ success: false }));
     const res = await callWs(
       new Request("https://proxy.example/v1/responses", {
         headers: { authorization: "Bearer tk-ws-rl" },

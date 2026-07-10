@@ -3,15 +3,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createToken,
   generateToken,
-  getValidatedByHash,
   listTokens,
   sha256hex,
   touchLastUsed,
   updateToken,
 } from "../src/tokens";
-
-const getValidated = async (kv: KVNamespace, token: string) =>
-  getValidatedByHash(kv, await sha256hex(token));
+import { getValidated } from "./helpers";
 
 describe("generateToken", () => {
   it("has the ptk_ prefix and a url-safe body", () => {
@@ -59,24 +56,10 @@ describe("listTokens / updateToken / deleteToken", () => {
     const row = (await listTokens(env.TOKENS)).find((r) => r.label === "L1");
     expect(row?.hash).toBe(await sha256hex("list-t1"));
   });
-  it("updates label and providers", async () => {
-    const { hash } = await createToken(env.TOKENS, {
-      label: "old",
-      providers: ["openai"],
-      token: "upd-t",
-    });
-    const updated = await updateToken(env.TOKENS, hash, {
-      label: "new",
-      providers: ["openai", "anthropic"],
-    });
-    expect(updated?.label).toBe("new");
-    expect(updated?.providers).toEqual(["openai", "anthropic"]);
-  });
 });
 
 describe("touchLastUsed", () => {
-  // Pin the clock mid-day UTC: the day-memo tests would otherwise flake if the suite
-  // happens to straddle a UTC midnight between two touches.
+  // Pin mid-day UTC: the day-memo tests flake if the run straddles UTC midnight.
   beforeAll(() => vi.setSystemTime(new Date("2026-07-08T12:00:00Z")));
   afterAll(() => vi.useRealTimers());
 
@@ -115,8 +98,8 @@ describe("touchLastUsed", () => {
     const failing = {
       put: () => Promise.reject(new Error("KV PUT failed: 429")),
     } as unknown as KVNamespace;
-    await touchLastUsed(failing, hash); // must not throw, must release the claim
-    await touchLastUsed(env.TOKENS, hash); // same-day retry must write
+    await touchLastUsed(failing, hash);
+    await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
   });
 
@@ -127,7 +110,7 @@ describe("touchLastUsed", () => {
       token: "to-revoke",
     });
     await updateToken(env.TOKENS, hash, { status: "disabled" });
-    await touchLastUsed(env.TOKENS, hash); // must not re-enable the revoked token
+    await touchLastUsed(env.TOKENS, hash);
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
 });

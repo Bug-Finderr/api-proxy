@@ -1,11 +1,9 @@
-// Single owner of the mock upstream + admin token seed for BOTH compat tiers: the vitest
-// tier imports it through setup.ts, and test/run-py.mjs loads it under vanilla node (which
-// is why this file is plain .mjs - types live in mock.d.mts).
+// Shared by both compat tiers; run-py.mjs loads it under vanilla node (Node strips the types natively).
 import { createHash } from "node:crypto";
 import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 
-// Fake real-keys injected as the worker's bindings. Tests assert these reach the mock
-// upstream (proving the swap) and that the proxy token never does.
 export const FAKE = {
   openai: "FAKE-OPENAI-KEY",
   anthropic: "FAKE-ANTHROPIC-KEY",
@@ -13,7 +11,21 @@ export const FAKE = {
 };
 export const ADMIN_SECRET = "compat-admin-secret";
 
-function providerFromPath(path) {
+export interface Captured {
+  method: string;
+  path: string;
+  headers: Record<string, string | string[] | undefined>;
+  body: string;
+}
+
+export interface MockUpstream {
+  url: string;
+  last(): Captured | null;
+  reset(): void;
+  close(): Promise<void>;
+}
+
+function providerFromPath(path: string): string {
   if (path.includes("/v1beta/openai/")) return "openai"; // gemini OpenAI-compat uses OpenAI shape
   if (
     path.includes(":generateContent") ||
@@ -25,7 +37,7 @@ function providerFromPath(path) {
   return "openai";
 }
 
-function bodyFor(provider) {
+function bodyFor(provider: string): unknown {
   if (provider === "anthropic")
     return {
       id: "msg_1",
@@ -66,7 +78,7 @@ function bodyFor(provider) {
   };
 }
 
-function writeSse(res, provider) {
+function writeSse(res: http.ServerResponse, provider: string): void {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -104,8 +116,8 @@ function writeSse(res, provider) {
   res.end();
 }
 
-export async function startMockUpstream() {
-  let captured = null;
+export async function startMockUpstream(): Promise<MockUpstream> {
+  let captured: Captured | null = null;
   const server = http.createServer((req, res) => {
     const path = req.url ?? "";
     // Control endpoints: the Python tier reads/clears the capture over HTTP.
@@ -120,7 +132,7 @@ export async function startMockUpstream() {
       res.end();
       return;
     }
-    const chunks = [];
+    const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const body = Buffer.concat(chunks).toString();
@@ -135,19 +147,53 @@ export async function startMockUpstream() {
       res.end(JSON.stringify(bodyFor(provider)));
     });
   });
-  await new Promise((r) => server.listen(0, "127.0.0.1", () => r()));
-  const { port } = server.address();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const { port } = server.address() as AddressInfo;
   return {
     url: `http://127.0.0.1:${port}`,
     last: () => captured,
     reset: () => {
       captured = null;
     },
-    close: () => new Promise((res) => server.close(() => res())),
+    close: () => new Promise<void>((res) => server.close(() => res())),
   };
 }
 
-export async function seedToken(url, opts) {
+export async function startWorker(mockUrl: string): Promise<{
+  worker: Unstable_DevWorker;
+  url: string;
+  wsUrl: string;
+}> {
+  const worker = await unstable_dev("src/index.ts", {
+    config: "wrangler.toml",
+    local: true,
+    vars: {
+      OPENAI_API_KEY: FAKE.openai,
+      ANTHROPIC_API_KEY: FAKE.anthropic,
+      GEMINI_API_KEY: FAKE.gemini,
+      ADMIN_SECRET,
+      OPENAI_UPSTREAM: mockUrl,
+      ANTHROPIC_UPSTREAM: mockUrl,
+      GEMINI_UPSTREAM: mockUrl,
+    },
+    experimental: { disableExperimentalWarning: true },
+  });
+  // unstable_dev can report 0.0.0.0 / ::, which Python HTTP clients and raw ws clients hang dialing.
+  const host =
+    !worker.address || worker.address === "0.0.0.0" || worker.address === "::"
+      ? "127.0.0.1"
+      : worker.address;
+  return {
+    worker,
+    url: `http://${host}:${worker.port}`,
+    wsUrl: `ws://${host}:${worker.port}`,
+  };
+}
+
+export async function seedToken(
+  url: string,
+  opts: { token: string; providers: string[]; label?: string },
+): Promise<void> {
   const login = await fetch(`${url}/admin/login`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -156,8 +202,7 @@ export async function seedToken(url, opts) {
   if (login.status !== 200)
     throw new Error(`admin login failed: ${login.status}`);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-  // Local dev KV persists across runs (.wrangler/state) and creation 409s on an existing
-  // hash (overwrite guard), so make the seed idempotent: delete any stale record first.
+  // dev KV persists across runs and creation 409s on an existing hash, so delete any stale record first
   const hash = createHash("sha256").update(opts.token).digest("hex");
   await fetch(`${url}/admin/api/tokens/${hash}`, {
     method: "DELETE",

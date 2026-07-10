@@ -1,6 +1,4 @@
-# Python deps for the separate-runner compat tests in test/sdk-compat/*.py. Not part of the Node toolchain.
-# Pinned with ~= to lock the minor version: these libs shift default endpoints / base-URL handling
-# across minors, which is exactly what the compat tests encode. Bump deliberately, then re-run.
+# ~= pins the minor: these libs shift endpoint/base-URL defaults across minors, which the compat tests encode.
 # Setup (uv):  uv venv && uv pip install -r test/requirements.txt
 litellm~=1.89.3
 instructor~=1.15.3

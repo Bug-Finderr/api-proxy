@@ -13,8 +13,7 @@ import os
 import sys
 import urllib.request
 
-# This file is named after its package, so its own dir (sys.path[0]) would shadow
-# `import litellm`; drop it before importing the package.
+# this file's dir (sys.path[0]) shadows `import litellm`; drop it
 sys.path.pop(0)
 
 import litellm

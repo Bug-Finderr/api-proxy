@@ -10,8 +10,7 @@ const h = compatHarness({
   label: "genkit",
 });
 
-// googleAI({ baseUrl }) is the bare host; the plugin builds `${baseUrl}/v1beta/models/<model>:...`
-// and sends the key in the x-goog-api-key header.
+// googleAI baseUrl is the bare host; the plugin appends /v1beta/models/<model>:...
 const ai = () =>
   genkit({ plugins: [googleAI({ apiKey: TOKEN, baseUrl: h.url() })] });
 

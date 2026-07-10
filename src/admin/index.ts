@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { secureHeaders } from "hono/secure-headers";
+import { timingSafeEqual } from "hono/utils/buffer";
 import {
   createToken,
   deleteToken,
@@ -9,7 +10,7 @@ import {
   sha256hex,
   updateToken,
 } from "../tokens";
-import type { CoarseProvider, Env, TokenMetadata } from "../types";
+import type { CoarseProvider, Env } from "../types";
 import {
   createdNotice,
   dashboardPage,
@@ -19,21 +20,10 @@ import {
   tokenTable,
 } from "./views";
 
-const COOKIE = "cm_admin";
-const MAX_AGE = 86400; // 24h
+const COOKIE = "ap_admin";
+const MAX_AGE = 86400;
 
 const isHash = (h: string) => /^[0-9a-f]{64}$/.test(h);
-
-/** Constant-time secret comparison: hash both to a fixed length, then timingSafeEqual
- *  (a Workers extension to SubtleCrypto), so neither length nor prefix leaks via timing. */
-async function secretsEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [da, db] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(a)),
-    crypto.subtle.digest("SHA-256", enc.encode(b)),
-  ]);
-  return crypto.subtle.timingSafeEqual(da, db);
-}
 
 const VALID_PROVIDERS: CoarseProvider[] = ["openai", "anthropic", "gemini"];
 const parseProviders = (fd: FormData): CoarseProvider[] =>
@@ -54,7 +44,6 @@ app.use(
       scriptSrc: ["'unsafe-eval'", HTMX],
       styleSrc: ["'unsafe-inline'"],
       connectSrc: ["'self'"],
-      imgSrc: ["'self'"],
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
       baseUri: ["'none'"],
@@ -77,13 +66,12 @@ app.post("/login", async (c) => {
   const body = await c.req.parseBody();
   const ok =
     !!c.env.ADMIN_SECRET &&
-    (await secretsEqual(String(body.password || ""), c.env.ADMIN_SECRET));
+    (await timingSafeEqual(String(body.password || ""), c.env.ADMIN_SECRET));
   if (!ok) {
     console.warn("admin login failed");
     return c.text("invalid password", 401);
   }
-  // The signed value is the issue time: the 24h expiry holds server-side even if the
-  // client ignores Max-Age.
+  // The signed value is the issue time, so the 24h expiry holds server-side.
   await setSignedCookie(
     c,
     COOKIE,
@@ -100,8 +88,7 @@ app.post("/login", async (c) => {
   return c.text("ok", 200, { "HX-Redirect": "/admin" });
 });
 
-// Auth guard for everything below. getSignedCookie verifies the HMAC in constant time;
-// tampered gives false, absent undefined, and a non-numeric timestamp fails the age check.
+// Tampered cookie verifies false, absent undefined; a non-numeric timestamp fails the age check via NaN.
 app.use("/*", async (c, next) => {
   const ts = await getSignedCookie(c, c.env.ADMIN_SECRET, COOKIE);
   if (typeof ts === "string" && Date.now() / 1000 - Number(ts) <= MAX_AGE)
@@ -114,7 +101,7 @@ app.get("/", (c) => c.html(dashboardPage()));
 
 app.get("/logout", (c) => {
   deleteCookie(c, COOKIE, { path: "/admin" });
-  return c.body(null, 302, { Location: "/admin" });
+  return c.redirect("/admin");
 });
 
 app.get("/api/tokens", async (c) =>
@@ -139,8 +126,7 @@ app.post("/api/tokens", async (c) => {
   const rawExp = String(fd.get("expiresAt") || "").trim();
   let expiresAt: string | undefined;
   if (rawExp) {
-    // The form submits UTC ISO (converted in the browser). An offset-less value is rejected:
-    // it would be read in the runtime's local timezone (UTC in production, host tz in dev).
+    // The browser submits UTC ISO; an offset-less value would parse in the runtime's local tz, so reject it.
     const d = new Date(rawExp);
     if (Number.isNaN(d.getTime()) || !/(Z|[+-]\d{2}:\d{2})$/i.test(rawExp))
       return c.text("invalid expiry", 400);
@@ -152,9 +138,8 @@ app.post("/api/tokens", async (c) => {
     token: custom || undefined,
     expiresAt,
   });
-  // KV list() lags writes by up to 60s, so a table refresh can't show the new token;
-  // the response carries the authoritative row itself, swapped in out-of-band. The tbody
-  // is the disposable carrier htmx unwraps (non-outerHTML OOB inserts content, not element).
+  // KV list() lags writes up to 60s, so the new row rides the response out-of-band;
+  // the tbody is the carrier htmx unwraps.
   return c.html(
     html`${createdNotice(token, providers, new URL(c.req.url).origin)}
 		<template><tbody hx-swap-oob="afterbegin:#rows">${tokenRow({ hash, ...meta })}</tbody></template>`,
@@ -164,25 +149,11 @@ app.post("/api/tokens", async (c) => {
 app.put("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
-  const fd = await c.req.formData();
-  const patch: Partial<Pick<TokenMetadata, "label" | "providers" | "status">> =
-    {};
-  if (fd.has("label")) {
-    patch.label = String(fd.get("label")).trim();
-    if (!patch.label) return c.text("label is required", 400);
-  }
-  if (fd.has("status")) {
-    const s = String(fd.get("status"));
-    // Whitelist, don't default: a malformed value must not silently re-enable a token.
-    if (s !== "active" && s !== "disabled") return c.text("bad status", 400);
-    patch.status = s;
-  }
-  if (fd.has("providers")) {
-    patch.providers = parseProviders(fd);
-    if (!patch.providers.length)
-      return c.text("pick at least one provider", 400);
-  }
-  const meta = await updateToken(c.env.TOKENS, hash, patch);
+  const status = String((await c.req.formData()).get("status"));
+  // Whitelist, don't default: a malformed value must not silently re-enable a token.
+  if (status !== "active" && status !== "disabled")
+    return c.text("bad status", 400);
+  const meta = await updateToken(c.env.TOKENS, hash, { status });
   if (!meta) return c.text("not found", 404);
   return c.html(tokenRow({ hash, ...meta }));
 });

@@ -14,7 +14,7 @@ export default defineConfig({
     cloudflareTest({
       main: "./src/index.ts",
       miniflare: {
-        compatibilityDate: "2025-01-01",
+        compatibilityDate: "2026-07-01", // keep in sync with wrangler.toml
         kvNamespaces: ["TOKENS"],
         durableObjects: {
           US_EGRESS: { className: "UsEgress", useSQLite: true },

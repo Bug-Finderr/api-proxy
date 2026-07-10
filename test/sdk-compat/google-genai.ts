@@ -25,7 +25,7 @@ describe("google genai SDK compatibility", () => {
       "/v1beta/models/gemini-2.5-flash:generateContent",
     );
     expect(cap?.headers["x-goog-api-key"]).toBe(FAKE.gemini);
-    expect(cap?.path).not.toContain(TOKEN); // ?key= (if used) is stripped
+    expect(cap?.path).not.toContain(TOKEN);
     expect(JSON.stringify(cap?.headers)).not.toContain(TOKEN);
   });
 
@@ -45,7 +45,6 @@ describe("google genai SDK compatibility", () => {
 });
 
 describe("gemini via the OpenAI-compat route", () => {
-  // OpenAI SDK pointed at /v1beta/openai — token in Authorization: Bearer, scoped to gemini.
   const oai = () =>
     new OpenAI({ baseURL: `${h.url()}/v1beta/openai`, apiKey: TOKEN });
 
