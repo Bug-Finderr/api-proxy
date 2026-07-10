@@ -10,7 +10,7 @@ export const FAKE = {
   anthropic: "FAKE-ANTHROPIC-KEY",
   gemini: "FAKE-GEMINI-KEY",
 };
-export const ADMIN_SECRET = "compat-admin-secret";
+const ADMIN_SECRET = "compat-admin-secret";
 
 export interface Captured {
   method: string;
@@ -199,7 +199,7 @@ export async function startWorker(mockUrl: string): Promise<{
 
 export async function seedToken(
   url: string,
-  opts: { token: string; providers: string[]; label?: string },
+  opts: { token: string; providers: string[] },
 ): Promise<void> {
   const login = await fetch(`${url}/admin/login`, {
     method: "POST",
@@ -210,7 +210,7 @@ export async function seedToken(
     throw new Error(`admin login failed: ${login.status}`);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
   const body = new URLSearchParams();
-  body.set("label", opts.label ?? opts.token);
+  body.set("label", "compat");
   body.set("token", opts.token);
   for (const p of opts.providers) body.append("providers", p);
   const res = await fetch(`${url}/admin/api/tokens`, {

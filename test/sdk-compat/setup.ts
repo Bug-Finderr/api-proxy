@@ -12,11 +12,10 @@ import {
 export { FAKE };
 
 /** Accessors are lazy: call url()/last() inside it(), not at module scope. */
-export function compatHarness(opts: {
-  token: string;
-  providers: string[];
-  label?: string;
-}): { url(): string; last(): Captured | null } {
+export function compatHarness(opts: { token: string; providers: string[] }): {
+  url(): string;
+  last(): Captured | null;
+} {
   let mock: MockUpstream;
   let worker: TestWorker;
   let url = "";

@@ -6,7 +6,6 @@ const TOKEN = "compat-langchain-openai-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["openai"],
-  label: "langchain-openai",
 });
 
 // a plain model name with no tools stays on /v1/chat/completions, not /v1/responses

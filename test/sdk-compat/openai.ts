@@ -6,7 +6,6 @@ const TOKEN = "compat-openai-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["openai"],
-  label: "openai",
 });
 
 const client = () => new OpenAI({ baseURL: `${h.url()}/v1`, apiKey: TOKEN });

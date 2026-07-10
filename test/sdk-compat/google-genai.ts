@@ -7,7 +7,6 @@ const TOKEN = "compat-gemini-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["gemini"],
-  label: "gemini",
 });
 
 describe("google genai SDK compatibility", () => {

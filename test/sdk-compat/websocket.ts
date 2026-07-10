@@ -52,7 +52,6 @@ beforeAll(async () => {
   await seedToken(w.url, {
     token: TOKEN,
     providers: ["openai", "gemini"],
-    label: "ws",
   });
 });
 

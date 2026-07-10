@@ -54,15 +54,12 @@ app.use(
 
 // Login is the only unguarded route (registered before the auth guard).
 app.post("/login", async (c) => {
-  let allowed = true;
+  // Rate limiting is fail-open; the password still gates the route.
   try {
     const ip = c.req.header("cf-connecting-ip") || "unknown";
-    allowed = (await c.env.LOGIN_LIMITER.limit({ key: `login:${ip}` })).success;
-  } catch {
-    allowed = true;
-  }
-  if (!allowed)
-    return c.text("too many login attempts", 429, { "retry-after": "60" });
+    if (!(await c.env.LOGIN_LIMITER.limit({ key: `login:${ip}` })).success)
+      return c.text("too many login attempts", 429, { "retry-after": "60" });
+  } catch {}
   const body = await c.req.parseBody();
   const ok =
     !!c.env.ADMIN_SECRET &&

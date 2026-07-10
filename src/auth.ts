@@ -51,12 +51,9 @@ export async function authorize(
 
   // Fail-open: an erroring limiter must never brick the proxy. The binding counts
   // per-colo, so it is a loose ceiling, not strict abuse prevention.
-  let allowed = true;
   try {
-    allowed = (await env.RATE_LIMITER.limit({ key: hash })).success;
-  } catch {
-    allowed = true;
-  }
-  if (!allowed) return { status: 429, message: "rate limit exceeded" };
+    if (!(await env.RATE_LIMITER.limit({ key: hash })).success)
+      return { status: 429, message: "rate limit exceeded" };
+  } catch {}
   return { hash };
 }

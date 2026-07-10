@@ -7,7 +7,6 @@ const TOKEN = "compat-ai-sdk-google-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["gemini"],
-  label: "ai-sdk-google",
 });
 
 // @ai-sdk/google appends /models/<model>:generateContent, so baseURL must include /v1beta.
