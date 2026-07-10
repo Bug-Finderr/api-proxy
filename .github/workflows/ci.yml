@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: nubjs/setup-nub@v0
+        with:
+          nub-version: 0.4.7
+          node-version: 24
+          cache-dependency-path: lock.yaml
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.28
+          python-version: "3.14"
+      - run: nub ci
+      - run: |
+          uv venv --python 3.14
+          uv pip install -r test/requirements.txt
+      - run: nubx tsc --noEmit
+      - run: nubx biome check .
+      - run: nub audit --prod
+      - run: nubx wrangler deploy --dry-run
+      - run: nub run test

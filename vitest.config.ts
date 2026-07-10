@@ -8,7 +8,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
-    exclude: ["test/sdk-compat/**", "node_modules/**"],
+    exclude: ["test/sdk-compat/**"],
   },
   plugins: [
     cloudflareTest({
