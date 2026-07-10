@@ -34,6 +34,23 @@ async function call(req: Request): Promise<Response> {
   return res;
 }
 
+async function within<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out`)),
+          2_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe("proxy routing + key swap", () => {
   it("forwards a valid OpenAI request with the real key swapped in", async () => {
     const { hash } = await seed("tk-oai", ["openai"]);
@@ -399,35 +416,42 @@ describe("SSE passthrough", () => {
         headers: { "content-type": "text/event-stream" },
       });
     });
-    const res = await call(
+    const response = call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
         headers: { authorization: "Bearer tk-sse" },
         body: "{}",
       }),
     );
-    expect(res.headers.get("content-type")).toBe("text/event-stream");
-    const reader = res.body!.getReader();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const decode = (value?: Uint8Array) => new TextDecoder().decode(value);
     try {
-      const first = await reader.read();
+      const res = await within(response, "proxy response");
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      reader = res.body!.getReader();
+      const first = await within(reader.read(), "first SSE chunk");
       expect(decode(first.value)).toBe("data: a\n\n");
 
       const secondRead = reader.read();
-      expect(
-        await Promise.race([
-          secondRead.then(() => "second" as const),
-          Promise.resolve("still-gated" as const),
-        ]),
-      ).toBe("still-gated");
+      let secondSettled = false;
+      void secondRead.then(
+        () => {
+          secondSettled = true;
+        },
+        () => {
+          secondSettled = true;
+        },
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(secondSettled).toBe(false);
 
       releaseSecond();
-      const second = await secondRead;
+      const second = await within(secondRead, "second SSE chunk");
       expect(decode(second.value)).toBe("data: b\n\ndata: [DONE]\n\n");
-      expect((await reader.read()).done).toBe(true);
+      expect((await within(reader.read(), "SSE completion")).done).toBe(true);
     } finally {
       releaseSecond();
-      await reader.cancel();
+      await reader?.cancel();
     }
   });
 });
