@@ -2,7 +2,7 @@
 
 ## Problem
 
-Every proxied request (and every WS upgrade) stamped `lastUsed` with one KV write. One day (~500 requests) tripped Cloudflare's "50% of your daily Workers KV limit" warning email - half the day's write quota spent on a column that only shows a date.
+Every proxied request and WebSocket upgrade stamped `lastUsed` with one KV write. One day (~500 requests) triggered Cloudflare's "50% of your daily Workers KV limit" warning email, spending half the write quota on dashboard recency.
 
 ## What we found
 
@@ -14,9 +14,11 @@ Every proxied request (and every WS upgrade) stamped `lastUsed` with one KV writ
 
 ## The decision we keep
 
-`touchLastUsed` stamps **at most once per UTC day per token per isolate**: a module-scope day-memo checked synchronously before the first `await` (atomic on the single-threaded isolate), keyed only by validated hashes so it can't grow unbounded. It lives in `tokens.ts` so both call sites are covered - the HTTP hot path and the per-connection WS path, where a flapping realtime client reconnecting every second would otherwise burn ~86k writes/day on its own. The dashboard shows only the date, so nothing visible is lost.
+`touchLastUsed` stamps **at most once per UTC day per token per isolate**. The first qualifying use observed by that isolate wins: an authorized HTTP request that receives any upstream response, or a successful WebSocket upgrade. The UI localizes the stored ISO timestamp, but it is a coarse first-observed marker rather than the literal latest use.
 
-Accepted trades: a failed put releases the day-claim so the next request retries (on a quota-exhausted day that is one doomed, quota-free retry per request inside `waitUntil` - invisible to clients), and isolate churn re-stamps at worst a handful of times per token per day. Reads stay unmemoized - 100x headroom, and a memo would delay revocation for no binding win.
+A module-scope map claims the day before the first `await`, so concurrent requests in one isolate deduplicate. The map is never pruned and can grow by one entry per used token for that isolate's lifetime. Isolate churn can produce multiple writes per token/day; no duplication factor was measured.
+
+A failed put releases the claim so a later request retries inside `waitUntil`; reads stay unmemoized so revocation is not delayed further.
 
 Related: [proxy-token-security.md](proxy-token-security.md) (why `lastUsed` lives in its own `:lu` side key), [rate-limit-binding-free-and-loose.md](rate-limit-binding-free-and-loose.md).
 

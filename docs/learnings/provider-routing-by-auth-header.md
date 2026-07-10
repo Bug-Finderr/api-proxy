@@ -1,4 +1,4 @@
-# Provider routing by auth header
+# Provider routing by auth slot
 
 ## Problem
 
@@ -23,10 +23,7 @@ flowchart TD
     P -- no --> OAI[OpenAI]
 ```
 
-**Why not a path prefix** (e.g. `/openai/...`):
-
-- It would break Gemini, whose file-upload flow returns absolute `x-goog-upload-url` paths the client then calls directly; a prefix scheme can't survive that round trip.
-- It would force every client to rewrite the SDK's own base path, defeating the "change only base URL + key" promise.
+**Why not a path prefix:** the auth slot already identifies the provider. A prefix would add provider-specific stripping branches and alter the native paths clients expect without adding routing information.
 
 ## The decision we keep
 
