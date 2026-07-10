@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
-"""LiteLLM compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-`test/run-py.mjs` starts the worker and a mock upstream, seeds a proxy token, and exports
-PROXY_WORKER_URL / PROXY_MOCK_URL / PROXY_TOKEN / PROXY_FAKE_OPENAI. This file just drives LiteLLM
-at the worker and asserts the mock saw the real key swapped in (and the token nowhere).
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise LiteLLM's OpenAI client through the proxy and captured mock upstream."""
 
 import json
 import os
 import sys
 import urllib.request
 
-# This file is named after its package, so its own dir (sys.path[0]) would shadow
-# `import litellm`; drop it before importing the package.
+# this file's dir (sys.path[0]) shadows `import litellm`; drop it
 sys.path.pop(0)
 
 import litellm

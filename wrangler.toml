@@ -1,26 +1,21 @@
 name = "api-proxy"
 main = "src/index.ts"
-# Bumping past 2026-03-17 flips WS binaryType default (websocket_standard_binary_type); the
-# tier-2 binary-frame test plus the explicit binaryType pin in ws.ts cover that transition.
-compatibility_date = "2025-01-01"
+# Keep in sync with vitest.config.ts; tier 1 does not read this file.
+compatibility_date = "2026-07-01"
 workers_dev = true
 preview_urls = false
 
-# Persist console.* to Workers Logs (free plan: 200k events/day, 3-day retention - never a
-# charge). Infrastructure failures log their cause; without this, only a live `wrangler tail`
-# ever sees it.
+# Retain console output so infrastructure failures remain diagnosable.
 [observability]
 enabled = true
 
-# Token store. Create with: nubx wrangler kv namespace create api-proxy-tokens
-# then paste the returned id below before deploy. Local dev/tests use an in-memory namespace.
-# Dedicated to api-proxy — must NOT be shared with any other worker.
+# Dedicated token store; do not share it with another worker.
+# Create with `nubx wrangler kv namespace create api-proxy-tokens`; tests use an in-memory namespace.
 [[kv_namespaces]]
 binding = "TOKENS"
 id = "1b212581e15144fb9f931b221a8cc5cd"
 
-# Region-pinned egress relay (SQLite Durable Object, free plan). OpenAI calls that hit a
-# geo-blocked egress colo are re-issued through this DO via locationHint:"wnam" (North America).
+# US-jurisdiction egress relay for OpenAI geo-block retries.
 [[durable_objects.bindings]]
 name = "US_EGRESS"
 class_name = "UsEgress"
@@ -29,9 +24,8 @@ class_name = "UsEgress"
 tag = "v1"
 new_sqlite_classes = ["UsEgress"]
 
-# Per-token request-rate limit (Workers Rate Limiting binding; in-process, not a subrequest).
-# Keyed on the token hash; one shared ceiling for all tokens (KISS). Tune `limit` freely;
-# `period` must be 10 or 60. namespace_id is an arbitrary string-integer, unique per ruleset.
+# Per-token, per-colo limit keyed by token hash; `period` must be 10 or 60.
+# `namespace_id` is an arbitrary integer string unique to this ruleset.
 [[ratelimits]]
 name = "RATE_LIMITER"
 namespace_id = "1001"
@@ -40,8 +34,7 @@ namespace_id = "1001"
   limit = 100
   period = 60
 
-# Dedicated low-rate throttle for /admin/login, keyed per client IP (`login:<ip>`). Separate
-# ruleset so brute-force protection is not the proxy's 100/60 ceiling (~144k guesses/day).
+# Separate admin-login throttle keyed by client IP.
 [[ratelimits]]
 name = "LOGIN_LIMITER"
 namespace_id = "1002"

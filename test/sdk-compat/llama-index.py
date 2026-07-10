@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""LlamaIndex compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-Drives all three LlamaIndex LLM integrations (OpenAI, Anthropic, GoogleGenAI) through the worker and
-asserts the mock saw the real key swapped into the right slot, with the proxy token nowhere. Each
-integration just wraps the official provider SDK, so this proves LlamaIndex forwards base_url + key
-through cleanly for every provider.
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise LlamaIndex's OpenAI, Anthropic, and Gemini integrations through the proxy."""
 
 import json
 import os
@@ -38,10 +30,8 @@ def msg():
 
 
 def main():
-    # Real model ids are required: the OpenAI/Anthropic classes look up the context window from
-    # the model name and raise on an unknown id (the request still goes to the worker regardless).
+    # real model ids required: OpenAI/Anthropic raise on unknown ids (context-window lookup)
 
-    # 1) OpenAI -> Authorization: Bearer -> /v1/chat/completions
     reset()
     OpenAI(api_base=f"{W}/v1", api_key=TOKEN, model="gpt-4o").chat(msg())
     cap = captured()
@@ -49,7 +39,7 @@ def main():
     assert cap["headers"].get("authorization") == f"Bearer {os.environ['PROXY_FAKE_OPENAI']}"
     assert TOKEN not in json.dumps(cap["headers"]), "token leaked (openai)"
 
-    # 2) Anthropic -> x-api-key -> /v1/messages  (base_url is the bare host)
+    # base_url is the bare host; the SDK appends /v1/messages
     reset()
     Anthropic(
         base_url=W, api_key=TOKEN, model="claude-sonnet-4-6", max_tokens=16
@@ -59,7 +49,6 @@ def main():
     assert cap["headers"].get("x-api-key") == os.environ["PROXY_FAKE_ANTHROPIC"]
     assert TOKEN not in json.dumps(cap["headers"]), "token leaked (anthropic)"
 
-    # 3) GoogleGenAI -> x-goog-api-key -> /v1beta/models/<model>:generateContent
     # Pass max_tokens AND context_window so __init__ skips a live models.get() validation call.
     reset()
     GoogleGenAI(

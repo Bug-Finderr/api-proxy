@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""instructor compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-instructor wraps the official `openai` client, so it hits /v1/chat/completions with Authorization:
-Bearer. The mock returns plain text "hi", which can't satisfy the Pydantic response_model, so the
-structured parse fails by design - but the request already forwarded, so we assert on the mock
-capture (real key swapped in, token absent), not on the return value.
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise Instructor's OpenAI wrapper; verify its expected parse failure via mock capture."""
 
 import json
 import logging
@@ -15,8 +7,7 @@ import os
 import sys
 import urllib.request
 
-# This file is named after its package, so its own dir (sys.path[0]) would shadow
-# `import instructor`; drop it before importing the package.
+# this file's dir (sys.path[0]) shadows `import instructor`; drop it
 sys.path.pop(0)
 
 import instructor
@@ -24,8 +15,7 @@ import openai
 from instructor import Mode
 from pydantic import BaseModel
 
-# The mock's plain "hi" can't satisfy the schema, so instructor logs a retry-exhausted warning.
-# That failure is expected and asserted-around below; mute the log so the test output stays clean.
+# mute the retry-exhausted warning from the expected parse failure
 logging.getLogger("instructor").setLevel(logging.CRITICAL)
 
 W = os.environ["PROXY_WORKER_URL"]
@@ -55,7 +45,7 @@ def main():
             messages=[{"role": "user", "content": "say hi"}],
         )
     except Exception:
-        # Expected: the mock's plain "hi" can't be coerced into Hello. The forward already happened.
+        # expected: parse fails by design; the forward already happened
         pass
 
     cap = captured()

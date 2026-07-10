@@ -7,7 +7,6 @@ const TOKEN = "compat-ai-sdk-anthropic-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["anthropic"],
-  label: "ai-sdk-anthropic",
 });
 
 // @ai-sdk/anthropic appends only `/messages`, so baseURL must include /v1.

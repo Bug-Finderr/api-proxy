@@ -6,7 +6,6 @@ const TOKEN = "compat-anthropic-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["anthropic"],
-  label: "anthropic",
 });
 
 // Anthropic SDK appends /v1/messages itself, so baseURL must NOT include /v1.
@@ -23,7 +22,7 @@ describe("anthropic SDK compatibility", () => {
     const cap = h.last();
     expect(cap?.path).toBe("/v1/messages");
     expect(cap?.headers["x-api-key"]).toBe(FAKE.anthropic);
-    expect(cap?.headers["anthropic-version"]).toBeTruthy(); // SDK header passed through
+    expect(cap?.headers["anthropic-version"]).toBeTruthy();
     expect(JSON.stringify(cap?.headers)).not.toContain(TOKEN);
   });
 

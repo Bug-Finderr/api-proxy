@@ -3,15 +3,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createToken,
   generateToken,
-  getValidatedByHash,
   listTokens,
+  setTokenStatus,
   sha256hex,
   touchLastUsed,
-  updateToken,
 } from "../src/tokens";
-
-const getValidated = async (kv: KVNamespace, token: string) =>
-  getValidatedByHash(kv, await sha256hex(token));
+import { getValidated } from "./helpers";
 
 describe("generateToken", () => {
   it("has the ptk_ prefix and a url-safe body", () => {
@@ -49,7 +46,7 @@ describe("createToken + getValidated", () => {
   });
 });
 
-describe("listTokens / updateToken / deleteToken", () => {
+describe("listTokens / setTokenStatus / deleteToken", () => {
   it("lists created tokens by hash with metadata", async () => {
     await createToken(env.TOKENS, {
       label: "L1",
@@ -59,24 +56,27 @@ describe("listTokens / updateToken / deleteToken", () => {
     const row = (await listTokens(env.TOKENS)).find((r) => r.label === "L1");
     expect(row?.hash).toBe(await sha256hex("list-t1"));
   });
-  it("updates label and providers", async () => {
-    const { hash } = await createToken(env.TOKENS, {
-      label: "old",
-      providers: ["openai"],
-      token: "upd-t",
-    });
-    const updated = await updateToken(env.TOKENS, hash, {
-      label: "new",
-      providers: ["openai", "anthropic"],
-    });
-    expect(updated?.label).toBe("new");
-    expect(updated?.providers).toEqual(["openai", "anthropic"]);
+
+  it("lists every token when one KV page contains more than 50 records", async () => {
+    const created = await Promise.all(
+      Array.from({ length: 51 }, (_, i) =>
+        createToken(env.TOKENS, {
+          label: `bulk-${i}`,
+          providers: ["openai"],
+          token: `bulk-list-token-${i}`,
+        }),
+      ),
+    );
+
+    const listedHashes = new Set(
+      (await listTokens(env.TOKENS)).map((r) => r.hash),
+    );
+    for (const { hash } of created) expect(listedHashes.has(hash)).toBe(true);
   });
 });
 
 describe("touchLastUsed", () => {
-  // Pin the clock mid-day UTC: the day-memo tests would otherwise flake if the suite
-  // happens to straddle a UTC midnight between two touches.
+  // Pin mid-day UTC so the daily-stamp test cannot cross midnight.
   beforeAll(() => vi.setSystemTime(new Date("2026-07-08T12:00:00Z")));
   afterAll(() => vi.useRealTimers());
 
@@ -100,7 +100,6 @@ describe("touchLastUsed", () => {
     });
     await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
-    // a same-day re-touch must not rewrite the deleted stamp
     await env.TOKENS.delete(`${hash}:lu`);
     await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeNull();
@@ -115,8 +114,8 @@ describe("touchLastUsed", () => {
     const failing = {
       put: () => Promise.reject(new Error("KV PUT failed: 429")),
     } as unknown as KVNamespace;
-    await touchLastUsed(failing, hash); // must not throw, must release the claim
-    await touchLastUsed(env.TOKENS, hash); // same-day retry must write
+    await touchLastUsed(failing, hash);
+    await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
   });
 
@@ -126,8 +125,8 @@ describe("touchLastUsed", () => {
       providers: ["openai"],
       token: "to-revoke",
     });
-    await updateToken(env.TOKENS, hash, { status: "disabled" });
-    await touchLastUsed(env.TOKENS, hash); // must not re-enable the revoked token
+    await setTokenStatus(env.TOKENS, hash, "disabled");
+    await touchLastUsed(env.TOKENS, hash);
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
 });

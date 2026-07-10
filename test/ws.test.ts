@@ -4,19 +4,13 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createToken } from "../src/tokens";
 import { forwardCloseCode, handleWsProxy } from "../src/ws";
+import { fakeEgress, geo403, seed, setLimiter } from "./helpers";
 
-// A fake upstream 101 carrying a live WebSocket, so handleWsProxy can accept + pipe it.
 function ws101(): Response {
   const [upstream] = Object.values(new WebSocketPair());
   return new Response(null, { status: 101, webSocket: upstream });
 }
-const geo403 = () =>
-  new Response(
-    JSON.stringify({ error: { code: "unsupported_country_region_territory" } }),
-    { status: 403 },
-  );
 
 let captured: Request | null;
 let upstreamReply: () => Response;
@@ -40,10 +34,36 @@ async function callWs(req: Request): Promise<Response> {
   return res;
 }
 
-const seed = (
-  token: string,
-  providers: ("openai" | "anthropic" | "gemini")[],
-) => createToken(env.TOKENS, { label: token, providers, token });
+function closeEvent(socket: WebSocket, label: string): Promise<CloseEvent> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+    };
+    const onClose = (event: CloseEvent) => {
+      try {
+        if (socket.readyState !== WebSocket.CLOSED)
+          socket.close(event.code, event.reason);
+        resolve(event);
+      } catch (error) {
+        reject(error);
+      } finally {
+        cleanup();
+      }
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error(`${label} errored`));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} close timed out`));
+    }, 2_000);
+    socket.addEventListener("close", onClose);
+    socket.addEventListener("error", onError);
+  });
+}
 
 describe("handleWsProxy: validation (upstream never opened)", () => {
   it("401 when no token is present", async () => {
@@ -73,7 +93,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     expect(res.status).toBe(101);
     const u = new URL(captured!.url);
-    expect(u.protocol).toBe("https:"); // http(s) fetch-with-Upgrade, never ws://
+    expect(u.protocol).toBe("https:");
     expect(u.hostname).toBe("api.openai.com");
     expect(u.pathname).toBe("/v1/responses");
     expect(u.searchParams.get("model")).toBe("gpt-realtime-2");
@@ -98,7 +118,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     const proto = captured!.headers.get("sec-websocket-protocol") ?? "";
     expect(proto).toContain("realtime");
-    expect(proto).toContain("openai-beta.realtime-v1"); // non-key entries survive the strip
+    expect(proto).toContain("openai-beta.realtime-v1");
     expect(proto).not.toContain("openai-insecure-api-key");
   });
 
@@ -137,7 +157,6 @@ describe("handleWsProxy: subprotocol echo", () => {
       }),
     );
     expect(res.status).toBe(101);
-    // A browser handshake fails if the server does not pick one of the offered subprotocols.
     expect(res.headers.get("sec-websocket-protocol")).toBe("realtime");
   });
 });
@@ -153,35 +172,18 @@ describe("handleWsProxy: security invariant", () => {
         },
       }),
     );
-    // Scan the ENTIRE outbound surface (every header entry + the URL), like the HTTP invariant.
     const blob = [captured!.url, ...[...captured!.headers].flat()].join("|");
     expect(blob).not.toContain("SECRET-WS");
   });
 });
 
 describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
-  const realEgress = env.US_EGRESS;
-  let egressCalls: Request[];
-  afterEach(() => {
-    (env as { US_EGRESS: typeof realEgress }).US_EGRESS = realEgress;
-  });
-  function fakeEgress(reply: () => Response) {
-    egressCalls = [];
-    const stub = {
-      fetch: async (r: Request) => {
-        egressCalls.push(r);
-        return reply();
-      },
-    };
-    (env as { US_EGRESS: unknown }).US_EGRESS = {
-      idFromName: () => ({}),
-      get: () => stub,
-    };
-  }
+  let fake: ReturnType<typeof fakeEgress> | undefined;
+  afterEach(() => fake?.restore());
 
   it("retries the upgrade through the egress DO on a geo-403, with the real key", async () => {
     await seed("tk-geo", ["openai"]);
-    fakeEgress(ws101);
+    fake = fakeEgress(ws101);
     upstreamReply = geo403;
     const res = await callWs(
       new Request("https://proxy.example/v1/responses", {
@@ -189,16 +191,17 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       }),
     );
     expect(res.status).toBe(101);
-    expect(egressCalls.length).toBe(1);
-    expect(new URL(egressCalls[0].url).hostname).toBe("api.openai.com");
-    expect(egressCalls[0].headers.get("authorization")).toBe(
+    expect(fake.jurisdictions).toEqual(["us"]);
+    expect(fake.calls.length).toBe(1);
+    expect(new URL(fake.calls[0].url).hostname).toBe("api.openai.com");
+    expect(fake.calls[0].headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
   });
 
   it("never routes gemini through the egress DO (403 surfaces straight through)", async () => {
     await seed("tk-gem2", ["gemini"]);
-    fakeEgress(ws101);
+    fake = fakeEgress(ws101);
     upstreamReply = geo403;
     const res = await callWs(
       new Request(
@@ -206,24 +209,17 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       ),
     );
     expect(res.status).toBe(403);
-    expect(egressCalls.length).toBe(0);
+    expect(fake.calls.length).toBe(0);
   });
 });
 
 describe("handleWsProxy: rate limiting", () => {
-  const real = (env as { RATE_LIMITER?: unknown }).RATE_LIMITER;
-  afterEach(() => {
-    (env as { RATE_LIMITER?: unknown }).RATE_LIMITER = real;
-  });
-  const setLimiter = (
-    limit: (o: { key: string }) => Promise<{ success: boolean }>,
-  ) => {
-    (env as { RATE_LIMITER: unknown }).RATE_LIMITER = { limit };
-  };
+  let restore: (() => void) | undefined;
+  afterEach(() => restore?.());
 
   it("429s with Retry-After when denied, without opening the upstream", async () => {
     await seed("tk-ws-rl", ["openai"]);
-    setLimiter(async () => ({ success: false }));
+    restore = setLimiter(async () => ({ success: false }));
     const res = await callWs(
       new Request("https://proxy.example/v1/responses", {
         headers: { authorization: "Bearer tk-ws-rl" },
@@ -247,6 +243,56 @@ describe("handleWsProxy: upstream connect failure", () => {
       }),
     );
     expect(res.status).toBe(502);
+  });
+});
+
+describe("handleWsProxy: close propagation", () => {
+  it.each([
+    ["upstream", 4101, "upstream finished"],
+    ["client", 4102, "client finished"],
+  ] as const)("propagates a %s close code and reason", async (source, code, reason) => {
+    await seed(`tk-close-${source}`, ["openai"]);
+    let upstreamPeer: WebSocket | undefined;
+    upstreamReply = () => {
+      const [worker, peer] = Object.values(new WebSocketPair());
+      upstreamPeer = peer;
+      peer.accept({ allowHalfOpen: true });
+      return new Response(null, { status: 101, webSocket: worker });
+    };
+
+    const res = await callWs(
+      new Request("https://proxy.example/v1/responses", {
+        headers: { authorization: `Bearer tk-close-${source}` },
+      }),
+    );
+    expect(res.status).toBe(101);
+    const client = res.webSocket!;
+    const upstream = upstreamPeer!;
+    client.accept({ allowHalfOpen: true });
+    const order: string[] = [];
+    const clientClosed = closeEvent(client, "client").then((event) => {
+      order.push("client");
+      return event;
+    });
+    const upstreamClosed = closeEvent(upstream, "upstream").then((event) => {
+      order.push("upstream");
+      return event;
+    });
+
+    try {
+      (source === "client" ? client : upstream).close(code, reason);
+      for (const event of await Promise.all([clientClosed, upstreamClosed])) {
+        expect(event.code).toBe(code);
+        expect(event.reason).toBe(reason);
+      }
+      // The destination must reciprocate before the initiator's close completes.
+      expect(order).toEqual(
+        source === "client" ? ["upstream", "client"] : ["client", "upstream"],
+      );
+    } finally {
+      if (client.readyState !== WebSocket.CLOSED) client.close();
+      if (upstream.readyState !== WebSocket.CLOSED) upstream.close();
+    }
   });
 });
 

@@ -6,10 +6,8 @@ import { env } from "cloudflare:workers";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { getValidatedByHash, sha256hex } from "../src/tokens";
-
-const getValidated = async (kv: KVNamespace, token: string) =>
-  getValidatedByHash(kv, await sha256hex(token));
+import { sha256hex } from "../src/tokens";
+import { getValidated } from "./helpers";
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const ctx = createExecutionContext();
@@ -31,6 +29,9 @@ const form = (data: Record<string, string>, cookie?: string) => ({
   body: new URLSearchParams(data).toString(),
 });
 
+const put = (path: string, data: Record<string, string>, cookie: string) =>
+  call(path, { ...form(data, cookie), method: "PUT" });
+
 async function login(): Promise<string> {
   const res = await call(
     "/admin/login",
@@ -48,7 +49,6 @@ describe("admin auth", () => {
     expect(res.status).toBe(200);
     const page = await res.text();
     expect(page).toContain("password");
-    // a wrong password must surface, not silently no-op
     expect(page).toContain("login-error");
     expect(page).toContain("hx-on::response-error");
   });
@@ -126,11 +126,11 @@ describe("admin token CRUD", () => {
       ),
     });
     const hash = await sha256hex("to-disable-token");
-    const upd = await call(`/admin/api/tokens/${hash}`, {
-      method: "PUT",
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
-      body: new URLSearchParams({ status: "disabled" }).toString(),
-    });
+    const upd = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "disabled" },
+      cookie,
+    );
     expect(upd.status).toBe(200);
     expect(await getValidated(env.TOKENS, "to-disable-token")).toBeNull();
   });
@@ -170,8 +170,6 @@ describe("admin token CRUD", () => {
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
 
-    // the row renders a <time> element (machine-readable ISO + labeled-UTC fallback) that the
-    // dashboard's after-settle handler localizes in the browser
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();
@@ -191,8 +189,7 @@ describe("admin token CRUD", () => {
     });
     expect(bad.status).toBe(400);
 
-    // An offset-less value (raw API call bypassing the form) is rejected - it would be
-    // read in the runtime's local timezone, not the admin's.
+    // offset-less values (raw API, bypassing the form) would parse in the runtime's timezone, not the admin's
     const bare = await call("/admin/api/tokens", {
       ...form(
         {
@@ -213,8 +210,7 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::config-request");
     expect(page).toContain("toISOString()");
     expect(page).toContain("every 120s [document.visibilityState==='visible']");
-    // htmx delivery is hash-pinned (SRI): the EXACT hash is asserted so an accidental edit
-    // to HTMX_SRI (which would make the browser refuse htmx and brick the admin) fails here.
+    // Pin the hash so HTMX upgrades must update SRI deliberately.
     expect(page).toContain(
       'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',
     );
@@ -222,18 +218,18 @@ describe("admin token CRUD", () => {
     expect(page).toContain('id="flash"');
     expect(page).toContain("hx-on::response-error");
     expect(page).toContain("hx-on::send-error");
-    // timestamps localize in the browser: the after-settle handler rewrites <time> elements
     expect(page).toContain("hx-on::after-settle");
     expect(page).toContain("toLocaleString");
     expect(page).toContain("time[datetime]");
-    // mutations swap their own fragments; a stale-list refresh trigger must not come back
+    const addForm = page.match(
+      /<form[^>]*hx-post="\/admin\/api\/tokens"[^>]*>/,
+    )?.[0];
+    expect(addForm).toContain('method="post"');
+    expect(addForm).toContain('action="/admin/api/tokens"');
     expect(page).not.toContain("tokens-changed");
-    // click-to-copy delegation + tick feedback, and label is mandatory at the form level
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    // the picker's Today fills the current minute; the live input handler snaps it to EOD
-    // and blur+showPicker reopens the popup on the new value (it never re-reads it open)
     expect(page).toContain("hx-on:input=");
     expect(page).toContain("this.value.slice(0, 11) + '23:59'");
     expect(page).toContain("this.blur(); try { this.showPicker() } catch {}");
@@ -252,24 +248,14 @@ describe("admin token CRUD", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rejects a PUT that would strip every provider", async () => {
-    const cookie = await login();
-    const res = await call(`/admin/api/tokens/${"a".repeat(64)}`, {
-      method: "PUT",
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
-      body: "providers=bogus",
-    });
-    expect(res.status).toBe(400);
-  });
-
   it("rejects a malformed token id on PUT and DELETE", async () => {
     const cookie = await login();
-    const put = await call("/admin/api/tokens/not-a-hash", {
-      method: "PUT",
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie },
-      body: "status=disabled",
-    });
-    expect(put.status).toBe(400);
+    const bad = await put(
+      "/admin/api/tokens/not-a-hash",
+      { status: "disabled" },
+      cookie,
+    );
+    expect(bad.status).toBe(400);
     const del = await call("/admin/api/tokens/xyz", {
       method: "DELETE",
       headers: { cookie },
@@ -291,10 +277,8 @@ describe("admin token CRUD", () => {
 });
 
 describe("admin session verification", () => {
-  // Mint with the same hono/utils/cookie helper the worker verifies against:
-  // wire format is cm_admin=encodeURIComponent("<ts>.<base64 HMAC-SHA-256>").
   const mint = (ts: string) =>
-    serializeSigned("cm_admin", ts, "test-admin-secret");
+    serializeSigned("ap_admin", ts, "test-admin-secret");
 
   it("accepts a hand-minted valid cookie (sanity for the negative cases)", async () => {
     const cookie = await mint(String(Math.floor(Date.now() / 1000)));
@@ -303,18 +287,18 @@ describe("admin session verification", () => {
   });
   it("rejects a garbage cookie", async () => {
     const res = await call("/admin/api/tokens", {
-      headers: { cookie: "cm_admin=123.deadbeef" },
+      headers: { cookie: "ap_admin=123.deadbeef" },
     });
     expect(res.status).toBe(401);
   });
   it("rejects a tampered timestamp carrying a signature for a different value", async () => {
     const ts = Math.floor(Date.now() / 1000);
     const value = decodeURIComponent(
-      (await mint(String(ts))).slice("cm_admin=".length),
+      (await mint(String(ts))).slice("ap_admin=".length),
     );
     const sig = value.slice(value.lastIndexOf(".") + 1);
     const res = await call("/admin/api/tokens", {
-      headers: { cookie: `cm_admin=${encodeURIComponent(`${ts + 1}.${sig}`)}` },
+      headers: { cookie: `ap_admin=${encodeURIComponent(`${ts + 1}.${sig}`)}` },
     });
     expect(res.status).toBe(401);
   });
@@ -386,7 +370,6 @@ describe("admin input guards", () => {
       ),
     );
     expect(dup.status).toBe(409);
-    // the original record survives untouched
     expect(await getValidated(env.TOKENS, "duplicate-token")).toMatchObject({
       label: "dup1",
     });
@@ -394,10 +377,6 @@ describe("admin input guards", () => {
 
   it("400s a malformed status instead of defaulting a disabled token back to active", async () => {
     const cookie = await login();
-    const hdrs = {
-      "content-type": "application/x-www-form-urlencoded",
-      cookie,
-    };
     await call(
       "/admin/api/tokens",
       form(
@@ -406,21 +385,17 @@ describe("admin input guards", () => {
       ),
     );
     const hash = await sha256hex("whitelist-token");
-    await call(`/admin/api/tokens/${hash}`, {
-      method: "PUT",
-      headers: hdrs,
-      body: "status=disabled",
-    });
-    const bad = await call(`/admin/api/tokens/${hash}`, {
-      method: "PUT",
-      headers: hdrs,
-      body: "status=banana",
-    });
+    await put(`/admin/api/tokens/${hash}`, { status: "disabled" }, cookie);
+    const bad = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "banana" },
+      cookie,
+    );
     expect(bad.status).toBe(400);
-    expect(await getValidated(env.TOKENS, "whitelist-token")).toBeNull(); // still disabled
+    expect(await getValidated(env.TOKENS, "whitelist-token")).toBeNull();
   });
 
-  it("created notice carries the copy button and per-provider base URLs", async () => {
+  it("created notice carries click-to-copy values and per-provider base URLs", async () => {
     const cookie = await login();
     const res = await call("/admin/api/tokens", {
       ...form(
@@ -433,17 +408,13 @@ describe("admin input guards", () => {
       ),
     });
     const body = await res.text();
-    expect(body).toContain("notice-test-token");
-    // click-to-copy targets: token and every wiring URL carry the copy class
     expect(body).toContain('<code class="mono copy">notice-test-token</code>');
     expect(body).toContain(
       '<code class="mono copy">https://proxy.example/v1</code>',
     );
-    // the new row rides along out-of-band: KV list() lags writes, so a refresh can't show it
     expect(body).toContain(`id="tok-${await sha256hex("notice-test-token")}"`);
     expect(body).toContain('hx-swap-oob="afterbegin:#rows"');
 
-    // a gemini-scoped token shows BOTH wirings: native GenAI (bare origin) + OpenAI-SDK compat
     const gem = await call("/admin/api/tokens", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", cookie },

@@ -6,11 +6,9 @@ const TOKEN = "compat-langchain-google-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["gemini"],
-  label: "langchain-google-genai",
 });
 
-// baseUrl is the bare host; the SDK builds `${baseUrl}/v1beta/models/<model>:generateContent`
-// and sends the key in the x-goog-api-key header.
+// baseUrl is the bare host; the SDK appends /v1beta/models/<model>:generateContent
 const client = () =>
   new ChatGoogleGenerativeAI({
     model: "gemini-x",

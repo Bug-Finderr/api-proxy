@@ -1,4 +1,4 @@
-# dependencies (bun install)
+# dependencies
 node_modules
 
 # output
@@ -29,6 +29,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # local experiments / scratch
 .tmp-*
+HANDOFF.md
 
 # wrangler local state / build cache
 .wrangler

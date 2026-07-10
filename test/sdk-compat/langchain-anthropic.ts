@@ -6,7 +6,6 @@ const TOKEN = "compat-langchain-anthropic-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["anthropic"],
-  label: "langchain-anthropic",
 });
 
 // anthropicApiUrl is the bare host; the @anthropic-ai/sdk underneath appends /v1/messages.

@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Pydantic AI compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-Pydantic AI's OpenAIChatModel wraps the official `openai` client, so it hits /v1/chat/completions
-with Authorization: Bearer. We assert the mock saw the real key swapped in and the token nowhere.
-(OpenAIChatModel = Chat Completions; OpenAIResponsesModel would hit /v1/responses, which we avoid.)
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise Pydantic AI's OpenAI Chat Completions client through the proxy."""
 
 import json
 import os

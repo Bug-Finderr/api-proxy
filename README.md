@@ -42,13 +42,15 @@ Realtime sockets proxy the same way - point the WebSocket at the worker and use 
 | OpenAI Responses (WebSocket mode) | `wss://<worker>/v1/responses` | `Authorization: Bearer <proxy-token>` |
 | Gemini Live | `wss://<worker>/ws/…BidiGenerateContent?key=<proxy-token>` | `?key=` query |
 
-A browser can't set the `Authorization` header on a WebSocket, so OpenAI smuggles the key in the `openai-insecure-api-key.` subprotocol - the worker reads it there and re-presents it as a Bearer header upstream. Anthropic has no WebSocket API. A long-lived socket is rate-limited and validated **once at connect**, so a revoke applies to the next connection, not an open stream.
+A browser can't set the `Authorization` header on a WebSocket, so OpenAI places the key in the `openai-insecure-api-key.` subprotocol; the worker rewrites it to a Bearer header upstream. `x-api-key` upgrades route to Anthropic too. A long-lived socket is rate-limited and validated **once at connect**, so a revoke applies to the next connection, not an open stream.
 
 ## How it works
 
-The proxy token rides in the SDK's normal auth slot. The worker validates it, checks it's scoped to the requested provider, strips every inbound auth slot (headers and the `?key=` query param), sets the one real key, and forwards the request (path + remaining query verbatim, streaming included). Routing is by which auth header the token arrives in - see [docs/architecture.md](docs/architecture.md) for the routing table and full design.
+The proxy token rides in the SDK's normal auth slot. The worker validates its scope, strips the HTTP header/query auth slots, sets one provider key, and forwards the path, remaining query, body, and stream. WebSocket handshakes add OpenAI's browser subprotocol slot. See [docs/architecture.md](docs/architecture.md) for the routing table and design.
 
 ## Setup
+
+Requires Node 24+ and Nub 0.4.7.
 
 ```bash
 nub install
@@ -70,19 +72,19 @@ Optional plain vars (NOT secrets) override the upstreams; they default to the re
 
 ## Admin dashboard
 
-Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens: give each a label, the providers it may use (OpenAI / Anthropic / Gemini), an optional expiry, and either type a token (min 12 chars; an existing token is never silently overwritten) or generate one. The token is shown **once** at creation - with a copy button and the base URL(s) to hand out alongside it; only its SHA-256 hash is stored. Disable or delete any token at any time.
+Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens with a label, provider scope, optional expiry, and either a custom value (minimum 12 characters) or a generated value. The plaintext is shown **once**. KV stores its SHA-256 hash plus metadata (`label`, `last4`, scope, status, creation/expiry), with `lastUsed` in a side key. The admin route checks for an existing custom-token hash, but KV's read-then-write is not transactional, so do not race identical creations.
 
 ## Per-token controls
 
 - **Expiry** - optionally set an expiry at creation; past it the token is rejected and the dashboard shows it as `expired`.
-- **Rate limit** - each token is capped at 100 requests / 60s (`429` + `Retry-After` over the limit). Tune `[[ratelimits]]` in `wrangler.toml`. It is a per-colo, loose ceiling for abuse protection, not a strict quota.
-- **Scope & revoke** - a token only reaches the providers you check; disable or delete to revoke (KV propagation is up to ~60s).
+- **Rate limit** - each token is capped at 100 requests / 60s (`429` + `Retry-After` over the limit). Tune `[[ratelimits]]` in `wrangler.toml`. It is a per-location, loose ceiling for abuse protection, not a strict quota.
+- **Scope & revoke** - a token only reaches the providers you check; disable or delete to revoke (KV changes can take 60 seconds or more to reach other locations).
 
 ## Security
 
 - Real provider keys are Cloudflare secrets, injected only into outbound requests - never in KV, never returned to callers.
-- Tokens are stored as SHA-256 hashes; a KV/dashboard dump yields unusable hashes, not live tokens.
-- The worker strips every inbound auth slot - headers and the `?key=` query param - before setting the real key, so a proxy token is never forwarded upstream.
+- Token plaintext is not persisted; KV stores hashes, metadata, and separate last-used timestamps.
+- The worker strips HTTP header/query auth slots and the WebSocket key subprotocol before setting the provider credential, so a proxy token is not forwarded upstream.
 - Do not host the worker on a `*.openai.azure.com` / `*.cognitiveservices.azure.com` domain (the OpenAI SDK switches to Azure auth on those hostnames).
 
 ## Testing
@@ -94,7 +96,7 @@ nub run test:py       # tier 2 (Python): LiteLLM, LlamaIndex, instructor, Pydant
 nub run test          # all of the above
 ```
 
-**Each file in `test/sdk-compat/` is named after the package it drives and doubles as a usage example** - copy the `baseURL`/`apiKey` wiring from the file matching your client (e.g. `ai-sdk-openai.ts`, `langchain-anthropic.ts`, `pydantic-ai.py`), from `fetch.ts` for raw HTTP, or from `websocket.ts` for a wss client. Each distinct library is tested once, in one language; anything not listed reuses an already-proven auth slot - the proof matrix is [docs/learnings/compat-is-the-auth-slot-not-the-sdk.md](docs/learnings/compat-is-the-auth-slot-not-the-sdk.md), and the harness design is [docs/architecture.md](docs/architecture.md) §14.
+**Each client-named compatibility case doubles as a usage example.** Keep every client: shared auth-slot routing is only one invariant, while separate cases catch base-URL options, default endpoints, implicit headers, transport choices, and streaming behavior. Copy the wiring from the matching file, `fetch.ts`, or `websocket.ts`. The coverage rationale is [docs/learnings/compat-is-the-auth-slot-not-the-sdk.md](docs/learnings/compat-is-the-auth-slot-not-the-sdk.md); the harness is [docs/architecture.md](docs/architecture.md) §14.
 
 Two gotchas: use Anthropic's normal API-key mode (its OAuth `authToken` mode sends `Bearer`, which would route to OpenAI), and the legacy `google-generativeai` Python SDK needs `transport="rest"` (it defaults to gRPC and won't traverse an HTTP proxy otherwise).
 
@@ -109,7 +111,7 @@ uv pip install -r test/requirements.txt
 
 ## Cost
 
-Cloudflare Workers free tier covers this (100k requests/day). You only pay upstream providers for API usage.
+The Worker and SQLite Durable Object have separate allowances. Cloudflare's Free Durable Object tier lists **100,000 requests/day** and **13,000 GB-s/day** (pricing page updated 2026-06-19). Each OpenAI geo-block fallback consumes one DO request, and its execution contributes to active duration. See [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/); upstream API usage is billed by the provider.
 
 ## Contributing
 
