@@ -107,7 +107,7 @@ uv venv
 uv pip install -r test/requirements.txt
 ```
 
-> **Gemini is untested with the actual API.** No test hits a live provider - all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment; Gemini is **not**, because `GEMINI_API_KEY` isn't set yet, so the Gemini route has never run against the real Google Generative Language API. Treat it as built-but-unproven until a key is added.
+> **Gemini is untested with the actual API.** No test hits a live provider - all three run against a mock upstream. OpenAI and Anthropic are additionally verified live in deployment. A `GEMINI_API_KEY` secret is configured, but its validity and the Gemini route have not been verified against the real Google Generative Language API. Treat it as built-but-unproven until that live check passes.
 
 ## Cost
 
