@@ -2,7 +2,7 @@
 
 ## Problem
 
-Share provider access without exposing the real key, revocably, with unmodified SDKs - and no leak in any direction, however oddly a client uses the token.
+Share provider access with unmodified SDKs without disclosing the provider key to clients, KV, application logs, or another relay.
 
 ## What we found
 
@@ -13,8 +13,8 @@ Share provider access without exposing the real key, revocably, with unmodified 
 ## The decision we keep
 
 - **The token rides the SDK's own auth slot** - the client swaps only base URL and key ([provider-routing-by-auth-header.md](provider-routing-by-auth-header.md)).
-- **Strip-all-then-set-one** (`swapAuth`): delete every inbound auth slot - the headers and `?key=` on both paths, plus the subprotocol on wss - and set exactly one real key. The slot list has a single owner (`stripAuthSlots`, shared by the HTTP and WS paths), so a new slot is added in one place, not four.
-- **Hashed at rest**, plaintext shown once - KV never holds a usable credential.
+- **Strip-all-then-set-one:** `stripAuthSlots` owns the HTTP header/query list and is shared by HTTP and WebSocket paths; `ws.ts` separately removes OpenAI's key-bearing subprotocol entry. Then the proxy sets one provider credential.
+- **Hashed at rest:** plaintext is shown once. KV holds the hash and metadata, plus a separate `:lu` timestamp key, never the usable proxy token.
 - **`lastUsed` in a side key** (`<hash>:lu`), never the record - the hot path physically cannot re-enable a revoked token.
 
 Related: [websocket-proxy-auth-slots.md](websocket-proxy-auth-slots.md) (wider wss slot set), [kv-free-tier-write-quota.md](kv-free-tier-write-quota.md) (why the stamp is throttled).

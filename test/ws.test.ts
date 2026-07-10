@@ -34,6 +34,37 @@ async function callWs(req: Request): Promise<Response> {
   return res;
 }
 
+function closeEvent(socket: WebSocket, label: string): Promise<CloseEvent> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+    };
+    const onClose = (event: CloseEvent) => {
+      try {
+        if (socket.readyState !== WebSocket.CLOSED)
+          socket.close(event.code, event.reason);
+        resolve(event);
+      } catch (error) {
+        reject(error);
+      } finally {
+        cleanup();
+      }
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error(`${label} errored`));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} close timed out`));
+    }, 2_000);
+    socket.addEventListener("close", onClose);
+    socket.addEventListener("error", onError);
+  });
+}
+
 describe("handleWsProxy: validation (upstream never opened)", () => {
   it("401 when no token is present", async () => {
     const res = await callWs(new Request("https://proxy.example/v1/realtime"));
@@ -62,7 +93,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     expect(res.status).toBe(101);
     const u = new URL(captured!.url);
-    expect(u.protocol).toBe("https:"); // http(s) fetch-with-Upgrade, never ws://
+    expect(u.protocol).toBe("https:");
     expect(u.hostname).toBe("api.openai.com");
     expect(u.pathname).toBe("/v1/responses");
     expect(u.searchParams.get("model")).toBe("gpt-realtime-2");
@@ -126,7 +157,6 @@ describe("handleWsProxy: subprotocol echo", () => {
       }),
     );
     expect(res.status).toBe(101);
-    // A browser handshake fails if the server does not pick one of the offered subprotocols.
     expect(res.headers.get("sec-websocket-protocol")).toBe("realtime");
   });
 });
@@ -161,6 +191,7 @@ describe("handleWsProxy: OpenAI geo-403 fallback via the egress DO", () => {
       }),
     );
     expect(res.status).toBe(101);
+    expect(fake.jurisdictions).toEqual(["us"]);
     expect(fake.calls.length).toBe(1);
     expect(new URL(fake.calls[0].url).hostname).toBe("api.openai.com");
     expect(fake.calls[0].headers.get("authorization")).toBe(
@@ -212,6 +243,56 @@ describe("handleWsProxy: upstream connect failure", () => {
       }),
     );
     expect(res.status).toBe(502);
+  });
+});
+
+describe("handleWsProxy: close propagation", () => {
+  it.each([
+    ["upstream", 4101, "upstream finished"],
+    ["client", 4102, "client finished"],
+  ] as const)("propagates a %s close code and reason", async (source, code, reason) => {
+    await seed(`tk-close-${source}`, ["openai"]);
+    let upstreamPeer: WebSocket | undefined;
+    upstreamReply = () => {
+      const [worker, peer] = Object.values(new WebSocketPair());
+      upstreamPeer = peer;
+      peer.accept({ allowHalfOpen: true });
+      return new Response(null, { status: 101, webSocket: worker });
+    };
+
+    const res = await callWs(
+      new Request("https://proxy.example/v1/responses", {
+        headers: { authorization: `Bearer tk-close-${source}` },
+      }),
+    );
+    expect(res.status).toBe(101);
+    const client = res.webSocket!;
+    const upstream = upstreamPeer!;
+    client.accept({ allowHalfOpen: true });
+    const order: string[] = [];
+    const clientClosed = closeEvent(client, "client").then((event) => {
+      order.push("client");
+      return event;
+    });
+    const upstreamClosed = closeEvent(upstream, "upstream").then((event) => {
+      order.push("upstream");
+      return event;
+    });
+
+    try {
+      (source === "client" ? client : upstream).close(code, reason);
+      for (const event of await Promise.all([clientClosed, upstreamClosed])) {
+        expect(event.code).toBe(code);
+        expect(event.reason).toBe(reason);
+      }
+      // The destination must reciprocate before the initiator's close completes.
+      expect(order).toEqual(
+        source === "client" ? ["upstream", "client"] : ["client", "upstream"],
+      );
+    } finally {
+      if (client.readyState !== WebSocket.CLOSED) client.close();
+      if (upstream.readyState !== WebSocket.CLOSED) upstream.close();
+    }
   });
 });
 

@@ -7,8 +7,8 @@ import {
   createToken,
   deleteToken,
   listTokens,
+  setTokenStatus,
   sha256hex,
-  updateToken,
 } from "../tokens";
 import type { CoarseProvider, Env } from "../types";
 import {
@@ -36,7 +36,7 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
 
-// htmx compiles hx-on handlers and hx-trigger event filters via Function, hence 'unsafe-eval'.
+// HTMX compiles hx-on and filtered hx-trigger attributes with Function.
 app.use(
   secureHeaders({
     contentSecurityPolicy: {
@@ -54,15 +54,12 @@ app.use(
 
 // Login is the only unguarded route (registered before the auth guard).
 app.post("/login", async (c) => {
-  let allowed = true;
+  // Rate limiting is fail-open; the password still gates the route.
   try {
     const ip = c.req.header("cf-connecting-ip") || "unknown";
-    allowed = (await c.env.LOGIN_LIMITER.limit({ key: `login:${ip}` })).success;
-  } catch {
-    allowed = true;
-  }
-  if (!allowed)
-    return c.text("too many login attempts", 429, { "retry-after": "60" });
+    if (!(await c.env.LOGIN_LIMITER.limit({ key: `login:${ip}` })).success)
+      return c.text("too many login attempts", 429, { "retry-after": "60" });
+  } catch {}
   const body = await c.req.parseBody();
   const ok =
     !!c.env.ADMIN_SECRET &&
@@ -71,7 +68,7 @@ app.post("/login", async (c) => {
     console.warn("admin login failed");
     return c.text("invalid password", 401);
   }
-  // The signed value is the issue time, so the 24h expiry holds server-side.
+  // Signing the issue time lets the server enforce the 24-hour expiry.
   await setSignedCookie(
     c,
     COOKIE,
@@ -88,7 +85,6 @@ app.post("/login", async (c) => {
   return c.text("ok", 200, { "HX-Redirect": "/admin" });
 });
 
-// Tampered cookie verifies false, absent undefined; a non-numeric timestamp fails the age check via NaN.
 app.use("/*", async (c, next) => {
   const ts = await getSignedCookie(c, c.env.ADMIN_SECRET, COOKIE);
   if (typeof ts === "string" && Date.now() / 1000 - Number(ts) <= MAX_AGE)
@@ -113,11 +109,9 @@ app.post("/api/tokens", async (c) => {
   const label = String(fd.get("label") || "").trim();
   if (!label) return c.text("label is required", 400);
   const providers = parseProviders(fd);
-  // Silent scope substitution is the wrong default for a security control: no boxes, no token.
   if (!providers.length) return c.text("pick at least one provider", 400);
   const custom = String(fd.get("token") || "").trim();
   if (custom) {
-    // No weak custom tokens, and no silent overwrite: it could resurrect a disabled token.
     if (custom.length < 12)
       return c.text("custom token too short (min 12 chars)", 400);
     if (await c.env.TOKENS.get(await sha256hex(custom)))
@@ -138,8 +132,7 @@ app.post("/api/tokens", async (c) => {
     token: custom || undefined,
     expiresAt,
   });
-  // KV list() lags writes up to 60s, so the new row rides the response out-of-band;
-  // the tbody is the carrier htmx unwraps.
+  // KV list() can lag by 60 seconds or more, so return the new row out-of-band.
   return c.html(
     html`${createdNotice(token, providers, new URL(c.req.url).origin)}
 		<template><tbody hx-swap-oob="afterbegin:#rows">${tokenRow({ hash, ...meta })}</tbody></template>`,
@@ -150,10 +143,9 @@ app.put("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
   const status = String((await c.req.formData()).get("status"));
-  // Whitelist, don't default: a malformed value must not silently re-enable a token.
   if (status !== "active" && status !== "disabled")
     return c.text("bad status", 400);
-  const meta = await updateToken(c.env.TOKENS, hash, { status });
+  const meta = await setTokenStatus(c.env.TOKENS, hash, status);
   if (!meta) return c.text("not found", 404);
   return c.html(tokenRow({ hash, ...meta }));
 });

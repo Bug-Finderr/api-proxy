@@ -7,7 +7,6 @@ const TOKEN = "compat-genkit-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["gemini"],
-  label: "genkit",
 });
 
 // googleAI baseUrl is the bare host; the plugin appends /v1beta/models/<model>:...

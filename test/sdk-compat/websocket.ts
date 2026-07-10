@@ -1,11 +1,8 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Unstable_DevWorker } from "wrangler";
 import { WebSocket, WebSocketServer } from "ws";
-import { FAKE, seedToken, startWorker } from "./mock.mts";
-
-// live end-to-end socket proof; per-slot swap details are covered in test/ws.test.ts
+import { FAKE, seedToken, startWorker, type TestWorker } from "./mock.mts";
 
 interface Handshake {
   headers: http.IncomingHttpHeaders;
@@ -43,7 +40,7 @@ async function startWsMockUpstream(): Promise<WsMock> {
 }
 
 let mock: WsMock;
-let worker: Unstable_DevWorker;
+let worker: TestWorker;
 let wsBase: string;
 const TOKEN = "compat-ws-token";
 
@@ -55,13 +52,15 @@ beforeAll(async () => {
   await seedToken(w.url, {
     token: TOKEN,
     providers: ["openai", "gemini"],
-    label: "ws",
   });
 });
 
 afterAll(async () => {
-  await worker?.stop();
-  await mock?.close();
+  try {
+    await worker?.dispose();
+  } finally {
+    await mock?.close();
+  }
 });
 
 beforeEach(() => mock.reset());

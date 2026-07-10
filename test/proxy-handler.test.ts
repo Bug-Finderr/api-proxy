@@ -5,7 +5,7 @@ import {
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { createToken, sha256hex, updateToken } from "../src/tokens";
+import { createToken, setTokenStatus, sha256hex } from "../src/tokens";
 import { fakeEgress, geo403, seed, setLimiter } from "./helpers";
 
 let captured: Request | null;
@@ -32,6 +32,23 @@ async function call(req: Request): Promise<Response> {
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
   return res;
+}
+
+async function within<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out`)),
+          2_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 describe("proxy routing + key swap", () => {
@@ -157,7 +174,7 @@ describe("auth failures (upstream never called)", () => {
       providers: ["openai"],
       token: "tk-disabled",
     });
-    await updateToken(env.TOKENS, hash, { status: "disabled" });
+    await setTokenStatus(env.TOKENS, hash, "disabled");
     const res = await call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
@@ -231,7 +248,6 @@ describe("security invariant", () => {
       providers: ["anthropic"],
       token: "PRECEDENCE-TOKEN",
     });
-    // Distinct sentinels: if identify preferred another slot, the lookup would 401 and the routing assert would fail.
     await call(
       new Request("https://proxy.example/v1/messages?key=WRONG-QUERY-SENT", {
         method: "POST",
@@ -304,6 +320,7 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
   it("retries through the egress DO when OpenAI returns a geo-403, with the real key", async () => {
     await seed("tk-geo", ["openai"]);
     fake = fakeEgress();
+    vi.spyOn(Math, "random").mockReturnValue(0.999999);
     fetchSpy.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         captured = input instanceof Request ? input : new Request(input, init);
@@ -325,13 +342,15 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: "via-egress" });
+    expect(fake.jurisdictions).toEqual(["us"]);
+    expect(fake.names).toEqual(["oa-egress-7"]);
     expect(fake.calls.length).toBe(1);
     const sent = fake.calls[0];
     expect(new URL(sent.url).hostname).toBe("api.openai.com");
     expect(sent.headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
-    expect(await sent.text()).toContain("hi"); // buffered body survived to the retry
+    expect(await sent.text()).toContain("hi");
   });
 
   it("does NOT retry on a non-geo 403 (passes it through)", async () => {
@@ -371,19 +390,23 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
 });
 
 describe("SSE passthrough", () => {
-  it("streams text/event-stream chunks through without buffering", async () => {
+  it("returns the first chunk while the upstream's second chunk is gated", async () => {
     await createToken(env.TOKENS, {
       label: "sse",
       providers: ["openai"],
       token: "tk-sse",
     });
+    let releaseSecond = () => {};
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
     fetchSpy.mockImplementation(async () => {
       const enc = new TextEncoder();
       const stream = new ReadableStream({
-        start(c) {
+        async start(c) {
           c.enqueue(enc.encode("data: a\n\n"));
-          c.enqueue(enc.encode("data: b\n\n"));
-          c.enqueue(enc.encode("data: [DONE]\n\n"));
+          await secondGate;
+          c.enqueue(enc.encode("data: b\n\ndata: [DONE]\n\n"));
           c.close();
         },
       });
@@ -392,17 +415,43 @@ describe("SSE passthrough", () => {
         headers: { "content-type": "text/event-stream" },
       });
     });
-    const res = await call(
+    const response = call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",
         headers: { authorization: "Bearer tk-sse" },
         body: "{}",
       }),
     );
-    expect(res.headers.get("content-type")).toBe("text/event-stream");
-    const text = await res.text();
-    expect(text).toContain("data: a");
-    expect(text).toContain("[DONE]");
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const decode = (value?: Uint8Array) => new TextDecoder().decode(value);
+    try {
+      const res = await within(response, "proxy response");
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      reader = res.body!.getReader();
+      const first = await within(reader.read(), "first SSE chunk");
+      expect(decode(first.value)).toBe("data: a\n\n");
+
+      const secondRead = reader.read();
+      let secondSettled = false;
+      void secondRead.then(
+        () => {
+          secondSettled = true;
+        },
+        () => {
+          secondSettled = true;
+        },
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(secondSettled).toBe(false);
+
+      releaseSecond();
+      const second = await within(secondRead, "second SSE chunk");
+      expect(decode(second.value)).toBe("data: b\n\ndata: [DONE]\n\n");
+      expect((await within(reader.read(), "SSE completion")).done).toBe(true);
+    } finally {
+      releaseSecond();
+      await reader?.cancel();
+    }
   });
 });
 

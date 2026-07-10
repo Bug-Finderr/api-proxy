@@ -7,7 +7,6 @@ const TOKEN = "compat-ai-sdk-openai-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["openai"],
-  label: "ai-sdk-openai",
 });
 
 // `.chat()` forces Chat Completions; the bare factory would hit /v1/responses (AI SDK 5+ default).

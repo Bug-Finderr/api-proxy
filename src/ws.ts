@@ -1,16 +1,14 @@
-import {
-  authorize,
-  egressStub,
-  identify,
-  isGeoBlock,
-  realKeyFor,
-  stripAuthSlots,
-} from "./proxy";
+import { authorize, identify, stripAuthSlots } from "./auth";
 import { touchLastUsed } from "./tokens";
 import { coarse, type Env, type Provider } from "./types";
-import { rewriteToUpstream } from "./upstreams";
+import {
+  egressStub,
+  isGeoBlock,
+  realKeyFor,
+  rewriteToUpstream,
+} from "./upstreams";
 
-// Browser WebSockets cannot set headers; OpenAI smuggles the key as a Sec-WebSocket-Protocol entry.
+// Browsers cannot set WebSocket headers, so OpenAI carries the key in Sec-WebSocket-Protocol.
 const OPENAI_KEY_SUBPROTOCOL = "openai-insecure-api-key.";
 
 // Close codes a peer is not allowed to send back via close(); forward as a bare close() instead.
@@ -128,7 +126,7 @@ export async function handleWsProxy(
     upstreamRes = await fetch(target, { headers });
     if (coarse(id.provider) === "openai" && (await isGeoBlock(upstreamRes))) {
       console.warn(
-        "openai geo-403 on ws upgrade; retrying via the NA egress DO",
+        "openai geo-403 on ws upgrade; retrying via the US egress DO",
       );
       upstreamRes = await egressStub(env).fetch(
         new Request(target, { headers }),
@@ -140,15 +138,14 @@ export async function handleWsProxy(
   }
 
   const upstream = upstreamRes.webSocket;
-  // A null webSocket means the upstream refused the upgrade; surface its response, not a generic 502.
   if (!upstream) return upstreamRes;
 
   const [client, server] = Object.values(new WebSocketPair());
   // Force ArrayBuffer: this compatibility_date delivers Blob frames by default, which send() rejects (silent drop).
   upstream.binaryType = "arraybuffer";
   server.binaryType = "arraybuffer";
-  upstream.accept();
-  server.accept();
+  upstream.accept({ allowHalfOpen: true });
+  server.accept({ allowHalfOpen: true });
   pump(server, upstream);
   pump(upstream, server);
 

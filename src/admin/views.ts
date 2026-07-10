@@ -2,8 +2,7 @@ import { html, raw } from "hono/html";
 import type { TokenRow } from "../tokens";
 import type { CoarseProvider } from "../types";
 
-// SRI-pinned: a tampered CDN script must not run on the page that holds ADMIN_SECRET.
-// HTMX and HTMX_SRI change together; the markup test pins the hash.
+// SRI pins the CDN script; update the URL and hash together.
 export const HTMX = "https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js";
 const HTMX_SRI =
   "sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V";
@@ -56,7 +55,7 @@ const adminHead = () => html`
 const providerPills = (providers: CoarseProvider[]) =>
   providers.map((p) => html`<span class="pill ${p}">${p}</span>`);
 
-// Rendered text is only a fallback; the dashboard's after-settle handler localizes <time> elements.
+// JavaScript localizes this ISO fallback after every HTMX settle.
 const localTime = (iso?: string) =>
   iso
     ? html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`
@@ -152,7 +151,7 @@ export const loginPage = () => html`<!doctype html>
 						hx-swap="none"
 						hx-on::response-error="document.getElementById('login-error').textContent = event.detail.xhr.responseText || 'login failed'"
 					>
-						<!-- method="post": a no-htmx native submit must not default to GET and leak the password into the URL. -->
+						<!-- POST prevents password leakage in the URL when HTMX is unavailable. -->
 						<label for="password">Admin password</label>
 						<input type="password" id="password" name="password" autocomplete="off" />
 						<div style="margin-top:12px"><button type="submit">Sign in</button></div>
@@ -182,6 +181,8 @@ export const dashboardPage = () => html`<!doctype html>
 				<div class="card">
 					<h2>Add token</h2>
 					<form
+						method="post"
+						action="/admin/api/tokens"
 						hx-post="/admin/api/tokens"
 						hx-target="#created"
 						hx-swap="innerHTML"
@@ -199,9 +200,8 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<!-- Today fills the current minute -> snap to 23:59. On input, not change (change fires only
-								     at close, clobbering picked times). blur()+showPicker() forces Chromium's open popup to
-								     re-read the value; elsewhere showPicker throws and the catch leaves it closed. -->
+								<!-- Use input because change fires only when the picker closes. Chromium rereads a
+								     snapped "Today" value only after blur/showPicker. -->
 								<input type="datetime-local" id="expiresAt" name="expiresAt"
 									hx-on:input="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) { this.value = this.value.slice(0, 11) + '23:59'; this.blur(); try { this.showPicker() } catch {} }"
 								/>

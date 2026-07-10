@@ -6,7 +6,6 @@ const TOKEN = "compat-langchain-google-token";
 const h = compatHarness({
   token: TOKEN,
   providers: ["gemini"],
-  label: "langchain-google-genai",
 });
 
 // baseUrl is the bare host; the SDK appends /v1beta/models/<model>:generateContent

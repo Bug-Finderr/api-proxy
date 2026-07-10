@@ -3,8 +3,16 @@
   "type": "module",
   "private": true,
   "license": "MIT",
+  "packageManager": "nub@0.4.7",
   "engines": {
     "node": ">=24"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "nub",
+      "version": "^0.4.7",
+      "onFail": "warn"
+    }
   },
   "scripts": {
     "dev": "wrangler dev",
