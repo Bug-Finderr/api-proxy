@@ -42,10 +42,15 @@ function closeEvent(socket: WebSocket, label: string): Promise<CloseEvent> {
       socket.removeEventListener("error", onError);
     };
     const onClose = (event: CloseEvent) => {
-      cleanup();
-      if (socket.readyState !== WebSocket.CLOSED)
-        socket.close(event.code, event.reason);
-      resolve(event);
+      try {
+        if (socket.readyState !== WebSocket.CLOSED)
+          socket.close(event.code, event.reason);
+        resolve(event);
+      } catch (error) {
+        reject(error);
+      } finally {
+        cleanup();
+      }
     };
     const onError = () => {
       cleanup();
