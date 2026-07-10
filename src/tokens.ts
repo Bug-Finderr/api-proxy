@@ -54,7 +54,7 @@ export async function getValidatedByHash(
   if (meta?.status !== "active") return null;
   if (meta.expiresAt) {
     const t = Date.parse(meta.expiresAt);
-    if (Number.isNaN(t)) return null; // fail-closed on malformed
+    if (Number.isNaN(t)) return null;
     if (t <= Date.now()) return "expired";
   }
   return meta;
@@ -98,7 +98,7 @@ export async function deleteToken(
   await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
 }
 
-// One stamp per UTC day per isolate: the dashboard shows only the date, and the free tier allows 1,000 KV writes/day account-wide.
+// Record the first observed use per UTC day and isolate, limiting KV writes.
 const luStampedDay = new Map<string, string>();
 
 export async function touchLastUsed(
@@ -112,7 +112,7 @@ export async function touchLastUsed(
   try {
     await kv.put(luKey(hash), now);
   } catch (err) {
-    // Release the claim so a later request retries today; rejected puts burn no quota.
+    // Release the claim so a later request can retry today.
     luStampedDay.delete(hash);
     console.warn("lastUsed stamp failed", err);
   }

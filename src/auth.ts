@@ -1,7 +1,7 @@
 import { getValidatedByHash, sha256hex } from "./tokens";
 import { coarse, type Env, type Provider, type TokenMetadata } from "./types";
 
-/** Token + provider from whichever auth slot the SDK used (the slot implies the provider). */
+/** Infer the provider from the HTTP auth slot carrying the proxy token. */
 export function identify(
   req: Request,
   url: URL,
@@ -22,7 +22,7 @@ export function identify(
   return key ? { token: key, provider: "gemini" } : null;
 }
 
-/** Single owner of the auth-slot list: deletes every slot identify reads. */
+/** Remove every HTTP auth slot read by identify(). */
 export function stripAuthSlots(headers: Headers, url: URL): void {
   headers.delete("x-api-key");
   headers.delete("x-goog-api-key");

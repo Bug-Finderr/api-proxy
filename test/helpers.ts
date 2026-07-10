@@ -1,4 +1,3 @@
-// Shared tier-1 helpers; runs inside the same workerd pool as the tests.
 import { env } from "cloudflare:workers";
 import { createToken, getValidatedByHash, sha256hex } from "../src/tokens";
 import type { CoarseProvider } from "../src/types";
@@ -15,7 +14,6 @@ export const geo403 = () =>
     { status: 403 },
   );
 
-/** Swap US_EGRESS for a fake namespace whose stub records requests and returns `reply()`. */
 export function fakeEgress(
   reply: () => Response = () =>
     new Response(JSON.stringify({ ok: "via-egress" }), { status: 200 }),
@@ -56,7 +54,6 @@ export function fakeEgress(
   };
 }
 
-/** Install a fake RATE_LIMITER; returns the restore fn for afterEach. */
 export function setLimiter(
   limit: (o: { key: string }) => Promise<{ success: boolean }>,
 ): () => void {

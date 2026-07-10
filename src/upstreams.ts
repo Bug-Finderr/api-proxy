@@ -70,9 +70,7 @@ export async function isGeoBlock(res: Response): Promise<boolean> {
   );
 }
 
-// OpenAI geo-403s some colos (e.g. HKG); a Worker's egress colo is fixed per invocation,
-// so a retry cannot escape it. The US-jurisdiction DO fetches from a supported region.
-// The real key never leaves Cloudflare.
+// Edge retries keep the blocked colo; the US-jurisdiction DO provides different egress.
 export class UsEgress extends DurableObject<Env> {
   override fetch(request: Request): Promise<Response> {
     return fetch(request);

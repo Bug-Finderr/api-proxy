@@ -121,7 +121,6 @@ export async function startMockUpstream(): Promise<MockUpstream> {
   let captured: Captured | null = null;
   const server = http.createServer((req, res) => {
     const path = req.url ?? "";
-    // Control endpoints: the Python tier reads/clears the capture over HTTP.
     if (path === "/__captured") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(captured));

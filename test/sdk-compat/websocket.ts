@@ -4,8 +4,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { FAKE, seedToken, startWorker, type TestWorker } from "./mock.mts";
 
-// live end-to-end socket proof; per-slot swap details are covered in test/ws.test.ts
-
 interface Handshake {
   headers: http.IncomingHttpHeaders;
   url: string;

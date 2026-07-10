@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""LlamaIndex compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-Drives all three LlamaIndex LLM integrations (OpenAI, Anthropic, GoogleGenAI) through the worker and
-asserts the mock saw the real key swapped into the right slot, with the proxy token nowhere. Each
-integration just wraps the official provider SDK, so this proves LlamaIndex forwards base_url + key
-through cleanly for every provider.
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise LlamaIndex's OpenAI, Anthropic, and Gemini integrations through the proxy."""
 
 import json
 import os

@@ -248,7 +248,6 @@ describe("security invariant", () => {
       providers: ["anthropic"],
       token: "PRECEDENCE-TOKEN",
     });
-    // Distinct sentinels: if identify preferred another slot, the lookup would 401 and the routing assert would fail.
     await call(
       new Request("https://proxy.example/v1/messages?key=WRONG-QUERY-SENT", {
         method: "POST",
@@ -351,7 +350,7 @@ describe("OpenAI geo-403 fallback via the US egress DO", () => {
     expect(sent.headers.get("authorization")).toBe(
       "Bearer real-openai-key-FAKE",
     );
-    expect(await sent.text()).toContain("hi"); // buffered body survived to the retry
+    expect(await sent.text()).toContain("hi");
   });
 
   it("does NOT retry on a non-geo 403 (passes it through)", async () => {

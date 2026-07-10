@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""instructor compatibility smoke test (thin client; the Node runner owns the worker + mock).
-
-instructor wraps the official `openai` client, so it hits /v1/chat/completions with Authorization:
-Bearer. The mock returns plain text "hi", which can't satisfy the Pydantic response_model, so the
-structured parse fails by design - but the request already forwarded, so we assert on the mock
-capture (real key swapped in, token absent), not on the return value.
-
-Run it (also part of `nub run test`):  nub run test:py
-"""
+"""Exercise Instructor's OpenAI wrapper; verify its expected parse failure via mock capture."""
 
 import json
 import logging

@@ -18,7 +18,7 @@ const errorResponse = (status: number, error: string) =>
 const EXPOSE_HEADERS =
   "x-goog-upload-url, x-goog-upload-status, x-goog-upload-chunk-granularity";
 
-/** Reflective CORS is intentional; the real key never rides on any CORS path. */
+/** Reflective CORS supports browser SDKs; provider credentials stay upstream-only. */
 function withCors(res: Response, req: Request): Response {
   const origin = req.headers.get("origin");
   if (origin) {
@@ -73,7 +73,7 @@ async function proxyRequest(
   const realKey = realKeyFor(provider, env);
   rewriteToUpstream(url, provider, env);
   const headers = new Headers(req.headers);
-  // swapAuth also mutates url: it strips ?key= so the proxy token never reaches upstream logs.
+  // swapAuth strips ?key= before the proxy token can reach upstream logs.
   swapAuth(headers, url, provider, realKey);
   const target = url.toString();
   const hasBody = req.method !== "GET" && req.method !== "HEAD";

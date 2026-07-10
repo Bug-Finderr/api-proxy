@@ -8,7 +8,7 @@ import {
   rewriteToUpstream,
 } from "./upstreams";
 
-// Browser WebSockets cannot set headers; OpenAI smuggles the key as a Sec-WebSocket-Protocol entry.
+// Browsers cannot set WebSocket headers, so OpenAI carries the key in Sec-WebSocket-Protocol.
 const OPENAI_KEY_SUBPROTOCOL = "openai-insecure-api-key.";
 
 // Close codes a peer is not allowed to send back via close(); forward as a bare close() instead.
@@ -138,7 +138,6 @@ export async function handleWsProxy(
   }
 
   const upstream = upstreamRes.webSocket;
-  // A null webSocket means the upstream refused the upgrade; surface its response, not a generic 502.
   if (!upstream) return upstreamRes;
 
   const [client, server] = Object.values(new WebSocketPair());

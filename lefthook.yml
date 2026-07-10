@@ -1,5 +1,4 @@
-# Biome pre-commit, per https://biomejs.dev/recipes/git-hooks/#lefthook
-# (nubx instead of npx; safe fixes only at commit time - no --unsafe)
+# Apply only safe Biome fixes to staged files.
 pre-commit:
   commands:
     check:

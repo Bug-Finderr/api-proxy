@@ -93,7 +93,7 @@ describe("handleWsProxy: auth swap + upgrade", () => {
     );
     expect(res.status).toBe(101);
     const u = new URL(captured!.url);
-    expect(u.protocol).toBe("https:"); // http(s) fetch-with-Upgrade, never ws://
+    expect(u.protocol).toBe("https:");
     expect(u.hostname).toBe("api.openai.com");
     expect(u.pathname).toBe("/v1/responses");
     expect(u.searchParams.get("model")).toBe("gpt-realtime-2");
@@ -157,7 +157,6 @@ describe("handleWsProxy: subprotocol echo", () => {
       }),
     );
     expect(res.status).toBe(101);
-    // A browser handshake fails if the server does not pick one of the offered subprotocols.
     expect(res.headers.get("sec-websocket-protocol")).toBe("realtime");
   });
 });

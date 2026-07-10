@@ -49,7 +49,6 @@ describe("admin auth", () => {
     expect(res.status).toBe(200);
     const page = await res.text();
     expect(page).toContain("password");
-    // a wrong password must surface, not silently no-op
     expect(page).toContain("login-error");
     expect(page).toContain("hx-on::response-error");
   });
@@ -171,7 +170,6 @@ describe("admin token CRUD", () => {
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
 
-    // the row's <time> element is localized in-browser by the after-settle handler
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();
@@ -212,7 +210,7 @@ describe("admin token CRUD", () => {
     expect(page).toContain("hx-on::config-request");
     expect(page).toContain("toISOString()");
     expect(page).toContain("every 120s [document.visibilityState==='visible']");
-    // exact SRI hash pinned: an accidental HTMX_SRI edit would make the browser refuse htmx and brick the admin
+    // Pin the hash so HTMX upgrades must update SRI deliberately.
     expect(page).toContain(
       'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',
     );
@@ -228,12 +226,10 @@ describe("admin token CRUD", () => {
     )?.[0];
     expect(addForm).toContain('method="post"');
     expect(addForm).toContain('action="/admin/api/tokens"');
-    // mutations swap their own fragments; a stale-list refresh trigger must not come back
     expect(page).not.toContain("tokens-changed");
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    // the input handler snaps Today to 23:59; blur+showPicker reopens the popup (an open picker never re-reads its value)
     expect(page).toContain("hx-on:input=");
     expect(page).toContain("this.value.slice(0, 11) + '23:59'");
     expect(page).toContain("this.blur(); try { this.showPicker() } catch {}");
@@ -281,7 +277,6 @@ describe("admin token CRUD", () => {
 });
 
 describe("admin session verification", () => {
-  // wire format: ap_admin=encodeURIComponent("<ts>.<base64 HMAC-SHA-256>"), minted with the same hono helper the worker verifies against
   const mint = (ts: string) =>
     serializeSigned("ap_admin", ts, "test-admin-secret");
 
@@ -417,7 +412,6 @@ describe("admin input guards", () => {
     expect(body).toContain(
       '<code class="mono copy">https://proxy.example/v1</code>',
     );
-    // the new row rides along out-of-band: KV list() lags writes, so a refresh can't show it
     expect(body).toContain(`id="tok-${await sha256hex("notice-test-token")}"`);
     expect(body).toContain('hx-swap-oob="afterbegin:#rows"');
 

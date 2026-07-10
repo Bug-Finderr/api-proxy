@@ -76,7 +76,7 @@ describe("listTokens / setTokenStatus / deleteToken", () => {
 });
 
 describe("touchLastUsed", () => {
-  // Pin mid-day UTC: the day-memo tests flake if the run straddles UTC midnight.
+  // Pin mid-day UTC so the daily-stamp test cannot cross midnight.
   beforeAll(() => vi.setSystemTime(new Date("2026-07-08T12:00:00Z")));
   afterAll(() => vi.useRealTimers());
 
@@ -100,7 +100,6 @@ describe("touchLastUsed", () => {
     });
     await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeTruthy();
-    // a same-day re-touch must not rewrite the deleted stamp
     await env.TOKENS.delete(`${hash}:lu`);
     await touchLastUsed(env.TOKENS, hash);
     expect(await env.TOKENS.get(`${hash}:lu`)).toBeNull();

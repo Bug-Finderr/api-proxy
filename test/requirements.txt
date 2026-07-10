@@ -1,5 +1,4 @@
-# ~= pins the minor: these libs shift endpoint/base-URL defaults across minors, which the compat tests encode.
-# Setup (uv):  uv venv && uv pip install -r test/requirements.txt
+# Minor-pinned because endpoint/base-URL defaults shift across minors. Setup: uv venv && uv pip install -r test/requirements.txt
 litellm~=1.89.3
 instructor~=1.15.3
 pydantic~=2.13.4
