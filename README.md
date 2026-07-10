@@ -50,6 +50,8 @@ The proxy token rides in the SDK's normal auth slot. The worker validates its sc
 
 ## Setup
 
+Requires Node 24+ and Nub 0.4.7.
+
 ```bash
 nub install
 nubx wrangler login

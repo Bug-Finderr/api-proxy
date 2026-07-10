@@ -29,7 +29,7 @@ function withCors(res: Response, req: Request): Response {
   return res;
 }
 
-/** OPTIONS carries no auth header, so preflight must be answered before token checks. */
+/** Preflight omits credential headers; answer before auth or upstream work. */
 function corsPreflight(req: Request): Response {
   const res = new Response(null, { status: 204 });
   res.headers.set(
