@@ -1,8 +1,9 @@
 // Shared by both compat tiers; run-py.mjs loads it under vanilla node (Node strips the types natively).
-import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { type Unstable_DevWorker, unstable_dev } from "wrangler";
+import { unstable_startWorker } from "wrangler";
+
+export type TestWorker = Awaited<ReturnType<typeof unstable_startWorker>>;
 
 export const FAKE = {
   openai: "FAKE-OPENAI-KEY",
@@ -160,34 +161,41 @@ export async function startMockUpstream(): Promise<MockUpstream> {
 }
 
 export async function startWorker(mockUrl: string): Promise<{
-  worker: Unstable_DevWorker;
+  worker: TestWorker;
   url: string;
   wsUrl: string;
 }> {
-  const worker = await unstable_dev("src/index.ts", {
+  const worker = await unstable_startWorker({
     config: "wrangler.toml",
-    local: true,
-    vars: {
-      OPENAI_API_KEY: FAKE.openai,
-      ANTHROPIC_API_KEY: FAKE.anthropic,
-      GEMINI_API_KEY: FAKE.gemini,
-      ADMIN_SECRET,
-      OPENAI_UPSTREAM: mockUrl,
-      ANTHROPIC_UPSTREAM: mockUrl,
-      GEMINI_UPSTREAM: mockUrl,
+    bindings: {
+      OPENAI_API_KEY: { type: "plain_text", value: FAKE.openai },
+      ANTHROPIC_API_KEY: { type: "plain_text", value: FAKE.anthropic },
+      GEMINI_API_KEY: { type: "plain_text", value: FAKE.gemini },
+      ADMIN_SECRET: { type: "plain_text", value: ADMIN_SECRET },
+      OPENAI_UPSTREAM: { type: "plain_text", value: mockUrl },
+      ANTHROPIC_UPSTREAM: { type: "plain_text", value: mockUrl },
+      GEMINI_UPSTREAM: { type: "plain_text", value: mockUrl },
     },
-    experimental: { disableExperimentalWarning: true },
+    dev: {
+      remote: false,
+      server: { hostname: "127.0.0.1", port: 0 },
+      persist: false,
+      watch: false,
+      inspector: false,
+      logLevel: "error",
+    },
   });
-  // unstable_dev can report 0.0.0.0 / ::, which Python HTTP clients and raw ws clients hang dialing.
-  const host =
-    !worker.address || worker.address === "0.0.0.0" || worker.address === "::"
-      ? "127.0.0.1"
-      : worker.address;
-  return {
-    worker,
-    url: `http://${host}:${worker.port}`,
-    wsUrl: `ws://${host}:${worker.port}`,
-  };
+  try {
+    const url = await worker.url;
+    return {
+      worker,
+      url: url.origin,
+      wsUrl: url.origin.replace(/^http/, "ws"),
+    };
+  } catch (error) {
+    await worker.dispose().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function seedToken(
@@ -202,12 +210,6 @@ export async function seedToken(
   if (login.status !== 200)
     throw new Error(`admin login failed: ${login.status}`);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-  // dev KV persists across runs and creation 409s on an existing hash, so delete any stale record first
-  const hash = createHash("sha256").update(opts.token).digest("hex");
-  await fetch(`${url}/admin/api/tokens/${hash}`, {
-    method: "DELETE",
-    headers: { cookie },
-  });
   const body = new URLSearchParams();
   body.set("label", opts.label ?? opts.token);
   body.set("token", opts.token);

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach } from "vitest";
-import type { Unstable_DevWorker } from "wrangler";
 import {
   type Captured,
   FAKE,
@@ -7,6 +6,7 @@ import {
   seedToken,
   startMockUpstream,
   startWorker,
+  type TestWorker,
 } from "./mock.mts";
 
 export { FAKE };
@@ -18,7 +18,7 @@ export function compatHarness(opts: {
   label?: string;
 }): { url(): string; last(): Captured | null } {
   let mock: MockUpstream;
-  let worker: Unstable_DevWorker;
+  let worker: TestWorker;
   let url = "";
   beforeAll(async () => {
     mock = await startMockUpstream();
@@ -28,8 +28,11 @@ export function compatHarness(opts: {
     await seedToken(url, opts);
   });
   afterAll(async () => {
-    await worker?.stop();
-    await mock?.close();
+    try {
+      await worker?.dispose();
+    } finally {
+      await mock?.close();
+    }
   });
   beforeEach(() => mock.reset());
   return { url: () => url, last: () => mock.last() };

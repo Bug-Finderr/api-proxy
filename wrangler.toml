@@ -1,6 +1,6 @@
 name = "api-proxy"
 main = "src/index.ts"
-# Keep in sync with vitest.config.ts (tier-1 miniflare does not read this file; tier-2 unstable_dev does).
+# Keep in sync with vitest.config.ts (tier-1 miniflare does not read this file; tier-2 unstable_startWorker does).
 compatibility_date = "2026-07-01"
 workers_dev = true
 preview_urls = false

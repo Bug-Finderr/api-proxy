@@ -17,26 +17,31 @@ const py =
 const dir = join(repo, "test", "sdk-compat");
 
 if (!existsSync(py)) {
-  console.log(
-    "[py] .venv not found - skipping. Setup: uv venv && uv pip install -r test/requirements.txt",
+  console.error(
+    "[py] .venv not found. Setup: uv venv && uv pip install -r test/requirements.txt",
   );
-  process.exit(0);
+  process.exit(1);
 }
 
 const pyFiles = readdirSync(dir)
   .filter((f) => f.endsWith(".py"))
   .sort();
-if (pyFiles.length === 0) process.exit(0);
+if (pyFiles.length === 0) {
+  console.error("[py] no Python compatibility client files found");
+  process.exit(1);
+}
 
 const TOKEN = "tk-py-compat-1";
 const PER_FILE_TIMEOUT_MS = 90_000;
 
 const mock = await startMockUpstream();
-const { worker, url: workerUrl } = await startWorker(mock.url);
-console.log(`[py] worker ${workerUrl}  mock ${mock.url}`);
-
+let worker;
 let failed = 0;
 try {
+  const started = await startWorker(mock.url);
+  worker = started.worker;
+  const workerUrl = started.url;
+  console.log(`[py] worker ${workerUrl}  mock ${mock.url}`);
   await seedToken(workerUrl, {
     token: TOKEN,
     providers: ["openai", "anthropic", "gemini"],
@@ -84,8 +89,11 @@ try {
     if (code !== 0) failed++;
   }
 } finally {
-  await worker.stop();
-  await mock.close();
+  try {
+    await worker?.dispose();
+  } finally {
+    await mock.close();
+  }
 }
 
 process.exit(failed ? 1 : 0);
