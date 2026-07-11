@@ -18,6 +18,7 @@ export interface TokenMetadata {
 export interface Env {
   TOKENS: KVNamespace;
   US_EGRESS: DurableObjectNamespace;
+  TOKEN_WRITER: DurableObjectNamespace<import("./tokens").TokenWriter>;
   RATE_LIMITER: RateLimit;
   LOGIN_LIMITER: RateLimit;
   OPENAI_API_KEY: string;

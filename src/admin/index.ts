@@ -3,14 +3,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { secureHeaders } from "hono/secure-headers";
 import { timingSafeEqual } from "hono/utils/buffer";
-import {
-  createToken,
-  deleteToken,
-  listTokens,
-  luKey,
-  patchToken,
-  sha256hex,
-} from "../tokens";
+import { createToken, listTokens, luKey, sha256hex } from "../tokens";
 import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
@@ -162,7 +155,7 @@ app.put("/api/tokens/:hash", async (c) => {
   if (!Object.keys(patch).length) return c.text("nothing to update", 400);
   // lastUsed is cosmetic: read it in parallel and never fail a committed patch over it.
   const [meta, lastUsed] = await Promise.all([
-    patchToken(c.env.TOKENS, hash, patch),
+    c.env.TOKEN_WRITER.getByName(hash).patch(hash, patch),
     c.env.TOKENS.get(luKey(hash)).catch(() => null),
   ]);
   if (!meta) return c.text("not found", 404);
@@ -172,7 +165,7 @@ app.put("/api/tokens/:hash", async (c) => {
 app.delete("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
-  await deleteToken(c.env.TOKENS, hash);
+  await c.env.TOKEN_WRITER.getByName(hash).remove(hash);
   return c.body("", 200);
 });
 

@@ -1,5 +1,6 @@
 // Tokens are keyed by SHA-256(token); the plaintext is never persisted.
-import type { CoarseProvider, TokenMetadata } from "./types";
+import { DurableObject } from "cloudflare:workers";
+import type { CoarseProvider, Env, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -116,5 +117,26 @@ export async function touchLastUsed(
     // Release the claim so a later request can retry today.
     luStampedDay.delete(hash);
     console.warn("lastUsed stamp failed", err);
+  }
+}
+
+// KV has no atomic read-modify-write, so admin mutations are serialized through one
+// DO instance per hash: each merge follows its own prior write instead of a possibly
+// stale read, which is what let an expiry edit resurrect a concurrently disabled token.
+export class TokenWriter extends DurableObject<Env> {
+  private queue: Promise<unknown> = Promise.resolve();
+  private run<T>(job: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(job, job);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+  patch(
+    hash: string,
+    patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
+  ) {
+    return this.run(() => patchToken(this.env.TOKENS, hash, patch));
+  }
+  remove(hash: string) {
+    return this.run(() => deleteToken(this.env.TOKENS, hash));
   }
 }

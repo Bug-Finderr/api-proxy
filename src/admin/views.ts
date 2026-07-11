@@ -90,7 +90,6 @@ export const tokenRow = (r: TokenRow) => {
 				hx-trigger="change"
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr:queue all"
 				hx-indicator="closest tr"
 			/>
 		</td>
@@ -102,7 +101,6 @@ export const tokenRow = (r: TokenRow) => {
 				hx-vals='{"status":"${r.status === "active" ? "disabled" : "active"}"}'
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr:queue all"
 				hx-indicator="closest tr"
 			>
 				${r.status === "active" ? "disable" : "enable"}
@@ -112,7 +110,6 @@ export const tokenRow = (r: TokenRow) => {
 				hx-delete="/admin/api/tokens/${r.hash}"
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr:queue all"
 				hx-indicator="closest tr"
 				hx-confirm="Delete this token?"
 			>
@@ -135,7 +132,7 @@ export const tokenTable = (rows: TokenRow[]) => html`
 				<th></th>
 			</tr>
 		</thead>
-		<tbody id="rows">
+		<tbody id="rows" hx-sync="#tokens:replace">
 			<tr class="empty"><td colspan="7" class="muted">No tokens yet.</td></tr>
 			${rows.map((r) => tokenRow(r))}
 		</tbody>
@@ -200,7 +197,7 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
 			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('button.edit'); if (e) { const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; try { i.showPicker() } catch {} i.focus() }"
 			hx-on:focusout="const t = event.target; if (t.matches('#rows input[type=datetime-local]')) { t.style.display = 'none'; t.previousElementSibling.style.display = '' }"
-			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) { const d = new Date(p.expiresAt); const n = new Date(); if (d <= n && d.toDateString() === n.toDateString()) p.expiresAt = p.expiresAt.slice(0, 11) + '23:59'; p.expiresAt = new Date(p.expiresAt).toISOString() }"
+			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) p.expiresAt = new Date(p.expiresAt).toISOString()"
 		>
 			<div class="wrap">
 				<div class="bar">
@@ -243,7 +240,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']">
+					<div id="tokens" hx-sync="this:drop" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']">
 						Loading…
 					</div>
 				</div>

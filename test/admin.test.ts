@@ -178,7 +178,7 @@ describe("admin token CRUD", () => {
     // Each row carries a click-to-edit expiry editor (behavior is delegated at the body).
     expect(table).toContain('hx-trigger="change"');
     expect(table).toContain('data-iso="2030-01-01T00:00:00.000Z"');
-    expect(table).toContain('hx-sync="closest tr:queue all"');
+    expect(table).toContain('hx-indicator="closest tr"');
 
     const bad = await call("/admin/api/tokens", {
       ...form(
@@ -242,6 +242,31 @@ describe("admin token CRUD", () => {
     });
   });
 
+  it("keeps a token disabled when an expiry edit races the disable", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "race", providers: "openai", token: "race-check-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("race-check-token");
+    for (let i = 0; i < 5; i++) {
+      await put(`/admin/api/tokens/${hash}`, { status: "active" }, cookie);
+      // Concurrent handlers interleave at KV awaits; the writer DO must serialize
+      // the merges so the stale-read expiry patch cannot resurrect the disable.
+      await Promise.all([
+        put(`/admin/api/tokens/${hash}`, { status: "disabled" }, cookie),
+        put(
+          `/admin/api/tokens/${hash}`,
+          { expiresAt: "2040-01-01T00:00:00.000Z" },
+          cookie,
+        ),
+      ]);
+      expect(await getValidated(env.TOKENS, "race-check-token")).toBeNull();
+    }
+  });
+
   it("400s an invalid expiry patch and a PUT with nothing to update", async () => {
     const cookie = await login();
     await call("/admin/api/tokens", {
@@ -294,12 +319,15 @@ describe("admin token CRUD", () => {
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    // One body-level converter serves every datetime-local: Today snaps to 23:59, then UTC ISO.
-    expect(page).toContain("p.expiresAt.slice(0, 11) + '23:59'");
+    // One body-level converter serves every datetime-local; values save exactly as picked.
+    expect(page).toContain("p.expiresAt = new Date(p.expiresAt).toISOString()");
+    // The poll and row mutations share one persistent sync scope (in-flight polls
+    // must never overwrite a newer row swap).
+    expect(page).toContain('id="tokens" hx-sync="this:drop"');
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();
-    expect(table).toContain('<tbody id="rows">');
+    expect(table).toContain('<tbody id="rows" hx-sync="#tokens:replace">');
     expect(table).toContain('class="empty"');
   });
 
