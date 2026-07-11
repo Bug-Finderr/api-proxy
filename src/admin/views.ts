@@ -38,6 +38,10 @@ tr.empty:not(:only-child){display:none}
 .notice code{display:block;background:#04140c;padding:8px 10px;border-radius:6px;margin-top:6px;word-break:break-all}
 .copy{cursor:pointer}
 .copy.copied::after{content:"✓";float:right;color:#74e0bb}
+.edit{background:none;border:0;padding:0;font:inherit;cursor:pointer}
+tr.htmx-request button{opacity:.5}
+.edit:hover{text-decoration:underline dotted}
+td input[type=datetime-local]{width:auto;padding:4px 6px;font-size:12px}
 .danger{color:#f08a8a;border-color:#5c2a2a}
 `;
 
@@ -64,28 +68,46 @@ const localTime = (iso?: string) =>
 export const tokenRow = (r: TokenRow) => {
   const expired = !!r.expiresAt && Date.parse(r.expiresAt) <= Date.now();
   return html`
-	<tr id="tok-${r.hash}" class="${r.status === "disabled" || expired ? "disabled" : ""}">
+	<tr
+		id="tok-${r.hash}"
+		class="${r.status === "disabled" || expired ? "disabled" : ""}"
+		hx-target="closest tr"
+		hx-swap="outerHTML"
+		hx-indicator="closest tr"
+	>
 		<td class="mono">${r.label || "(no label)"}</td>
 		<td class="mono muted">…${r.last4}</td>
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
-		<td>${expired ? html`<span class="danger">expired</span>` : html`<span class="muted">${localTime(r.expiresAt)}</span>`}</td>
+		<td>
+			<button
+				class="edit ${expired ? "danger" : "muted"}"
+				title="edit expiry"
+				data-iso="${r.expiresAt ?? ""}"
+			>
+				${expired ? "expired" : localTime(r.expiresAt)}
+			</button>
+			<input
+				type="datetime-local"
+				name="expiresAt"
+				aria-label="expiry"
+				style="display:none"
+				hx-put="/admin/api/tokens/${r.hash}"
+				hx-trigger="change"
+			/>
+		</td>
 		<td class="muted">${localTime(r.lastUsed)}</td>
 		<td style="text-align:right;white-space:nowrap">
 			<button
 				class="ghost"
 				hx-put="/admin/api/tokens/${r.hash}"
 				hx-vals='{"status":"${r.status === "active" ? "disabled" : "active"}"}'
-				hx-target="#tok-${r.hash}"
-				hx-swap="outerHTML"
 			>
 				${r.status === "active" ? "disable" : "enable"}
 			</button>
 			<button
 				class="ghost danger"
 				hx-delete="/admin/api/tokens/${r.hash}"
-				hx-target="#tok-${r.hash}"
-				hx-swap="outerHTML"
 				hx-confirm="Delete this token?"
 			>
 				delete
@@ -107,7 +129,7 @@ export const tokenTable = (rows: TokenRow[]) => html`
 				<th></th>
 			</tr>
 		</thead>
-		<tbody id="rows">
+		<tbody id="rows" hx-sync="#tokens:replace">
 			<tr class="empty"><td colspan="7" class="muted">No tokens yet.</td></tr>
 			${rows.map((r) => tokenRow(r))}
 		</tbody>
@@ -170,7 +192,9 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
-			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) })"
+			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('button.edit'); if (e) { htmx.trigger('#tokens', 'htmx:abort'); const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; try { i.showPicker() } catch {} i.focus() }"
+			hx-on:focusout="const t = event.target; if (t.matches('#rows input[type=datetime-local]')) { t.style.display = 'none'; t.previousElementSibling.style.display = '' }"
+			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) p.expiresAt = new Date(p.expiresAt).toISOString()"
 		>
 			<div class="wrap">
 				<div class="bar">
@@ -184,9 +208,9 @@ export const dashboardPage = () => html`<!doctype html>
 						method="post"
 						action="/admin/api/tokens"
 						hx-post="/admin/api/tokens"
+						hx-sync="#tokens:replace"
 						hx-target="#created"
 						hx-swap="innerHTML"
-						hx-on::config-request="if(event.detail.parameters.expiresAt) event.detail.parameters.expiresAt = new Date(event.detail.parameters.expiresAt).toISOString()"
 						hx-on::after-request="if(event.detail.successful) this.reset()"
 					>
 						<div class="row">
@@ -200,11 +224,7 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<!-- Use input because change fires only when the picker closes. Chromium rereads a
-								     snapped "Today" value only after blur/showPicker. -->
-								<input type="datetime-local" id="expiresAt" name="expiresAt"
-									hx-on:input="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) { this.value = this.value.slice(0, 11) + '23:59'; this.blur(); try { this.showPicker() } catch {} }"
-								/>
+								<input type="datetime-local" id="expiresAt" name="expiresAt" />
 							</div>
 						</div>
 						<div class="checks">
@@ -218,7 +238,7 @@ export const dashboardPage = () => html`<!doctype html>
 				</div>
 				<div class="card">
 					<h2>Tokens</h2>
-					<div id="tokens" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible']">
+					<div id="tokens" hx-sync="this:drop" hx-get="/admin/api/tokens" hx-trigger="load, every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']">
 						Loading…
 					</div>
 				</div>

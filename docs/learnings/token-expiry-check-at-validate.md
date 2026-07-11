@@ -7,7 +7,7 @@ Optional per-token expiry, enforced cheaply, without a second storage backend.
 ## What we found
 
 - **KV `expirationTtl` is the wrong tool:** 60s floor, it *deletes* the record on expiry (so the dashboard can't show an "expired" row), and it orphans the separate `<hash>:lu` last-used key.
-- `expiresAt` is set once and never mutates, so a check at read time has no consistency window - it is exact and adds zero extra reads (the field rides in the JSON already fetched to validate).
+- A check at read time is exact at the moment of validation and adds zero extra reads (the field rides in the JSON already fetched to validate). Admin edits to `expiresAt` simply change the compared value, subject to normal KV propagation like every other metadata change.
 
 ## The decision we keep
 

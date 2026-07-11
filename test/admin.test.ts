@@ -175,6 +175,10 @@ describe("admin token CRUD", () => {
     ).text();
     expect(table).toContain('datetime="2030-01-01T00:00:00.000Z"');
     expect(table).toContain("2030-01-01 00:00 UTC");
+    // Each row carries a click-to-edit expiry editor (behavior is delegated at the body).
+    expect(table).toContain('hx-trigger="change"');
+    expect(table).toContain('data-iso="2030-01-01T00:00:00.000Z"');
+    expect(table).toContain('hx-indicator="closest tr"');
 
     const bad = await call("/admin/api/tokens", {
       ...form(
@@ -204,12 +208,168 @@ describe("admin token CRUD", () => {
     expect(bare.status).toBe(400);
   });
 
+  it("edits expiry via PUT so the proxy honors it, and an empty value clears it", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "ee", providers: "openai", token: "edit-expiry-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("edit-expiry-token");
+    await env.TOKENS.put(`${hash}:lu`, "2026-07-01T00:00:00.000Z");
+
+    const past = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2020-01-01T00:00:00.000Z" },
+      cookie,
+    );
+    expect(past.status).toBe(200);
+    const row = await past.text();
+    expect(row).toContain('class="edit danger"');
+    // The swapped row must keep the separately stored lastUsed, not reset it to "never".
+    expect(row).toContain('datetime="2026-07-01T00:00:00.000Z"');
+    expect(await getValidated(env.TOKENS, "edit-expiry-token")).toBe("expired");
+
+    const cleared = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "" },
+      cookie,
+    );
+    expect(cleared.status).toBe(200);
+    // Clearing drops the key from the stored JSON entirely (never expires).
+    expect(await env.TOKENS.get(hash)).not.toContain("expiresAt");
+    expect(await getValidated(env.TOKENS, "edit-expiry-token")).toMatchObject({
+      status: "active",
+    });
+  });
+
+  it("keeps a token disabled when an expiry edit races the disable", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "race", providers: "openai", token: "race-check-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("race-check-token");
+    for (let i = 0; i < 5; i++) {
+      await put(`/admin/api/tokens/${hash}`, { status: "active" }, cookie);
+      // Concurrent handlers interleave at KV awaits; the writer DO must serialize
+      // the merges so the stale-read expiry patch cannot resurrect the disable.
+      await Promise.all([
+        put(`/admin/api/tokens/${hash}`, { status: "disabled" }, cookie),
+        put(
+          `/admin/api/tokens/${hash}`,
+          { expiresAt: "2040-01-01T00:00:00.000Z" },
+          cookie,
+        ),
+      ]);
+      expect(await getValidated(env.TOKENS, "race-check-token")).toBeNull();
+    }
+  });
+
+  it("merges from the writer's own storage, not a stale KV echo", async () => {
+    const cookie = await login();
+    const res = await call("/admin/api/tokens", {
+      ...form(
+        { label: "stale", providers: "openai", token: "stale-echo-token" },
+        cookie,
+      ),
+    });
+    expect(res.status).toBe(200);
+    const hash = await sha256hex("stale-echo-token");
+    await put(`/admin/api/tokens/${hash}`, { status: "disabled" }, cookie);
+    // Simulate KV serving a stale pre-disable record (KV has no read-your-write guarantee).
+    const stale = JSON.parse((await env.TOKENS.get(hash))!);
+    await env.TOKENS.put(hash, JSON.stringify({ ...stale, status: "active" }));
+    await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2040-01-01T00:00:00.000Z" },
+      cookie,
+    );
+    expect(await getValidated(env.TOKENS, "stale-echo-token")).toBeNull();
+  });
+
+  it("does not resurrect a deleted token from a stale KV echo (tombstone)", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "tomb", providers: "openai", token: "tombstone-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("tombstone-token");
+    const record = (await env.TOKENS.get(hash))!;
+    await call(`/admin/api/tokens/${hash}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    // The stale record resurfaces after the delete; a patch must not resurrect it.
+    await env.TOKENS.put(hash, record);
+    const res = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "active" },
+      cookie,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("a deleted then recreated token is editable again (tombstone cleared)", async () => {
+    const cookie = await login();
+    const mk = () =>
+      call("/admin/api/tokens", {
+        ...form(
+          { label: "re", providers: "openai", token: "recreate-token" },
+          cookie,
+        ),
+      });
+    await mk();
+    const hash = await sha256hex("recreate-token");
+    await call(`/admin/api/tokens/${hash}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect((await mk()).status).toBe(200);
+    const res = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "disabled" },
+      cookie,
+    );
+    expect(res.status).toBe(200);
+    expect(await getValidated(env.TOKENS, "recreate-token")).toBeNull();
+  });
+
+  it("400s an invalid expiry patch and a PUT with nothing to update", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "eb", providers: "openai", token: "bad-patch-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("bad-patch-token");
+    // POST already pins both parseExpiry rejection branches; one case pins the PUT wiring.
+    const bad = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2030-01-01T00:00" },
+      cookie,
+    );
+    expect(bad.status).toBe(400);
+    expect((await put(`/admin/api/tokens/${hash}`, {}, cookie)).status).toBe(
+      400,
+    );
+    expect(await getValidated(env.TOKENS, "bad-patch-token")).toMatchObject({
+      label: "eb",
+    });
+  });
+
   it("dashboard markup pins the browser-side UTC conversion and the visibility-gated poll", async () => {
     const cookie = await login();
     const page = await (await call("/admin", { headers: { cookie } })).text();
-    expect(page).toContain("hx-on::config-request");
-    expect(page).toContain("toISOString()");
-    expect(page).toContain("every 120s [document.visibilityState==='visible']");
+    expect(page).toContain(
+      "every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']",
+    );
     // Pin the hash so HTMX upgrades must update SRI deliberately.
     expect(page).toContain(
       'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',
@@ -230,13 +390,15 @@ describe("admin token CRUD", () => {
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    expect(page).toContain("hx-on:input=");
-    expect(page).toContain("this.value.slice(0, 11) + '23:59'");
-    expect(page).toContain("this.blur(); try { this.showPicker() } catch {}");
+    // One body-level converter serves every datetime-local; values save exactly as picked.
+    expect(page).toContain("p.expiresAt = new Date(p.expiresAt).toISOString()");
+    // The poll and row mutations share one persistent sync scope (in-flight polls
+    // must never overwrite a newer row swap).
+    expect(page).toContain('id="tokens" hx-sync="this:drop"');
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();
-    expect(table).toContain('<tbody id="rows">');
+    expect(table).toContain('<tbody id="rows" hx-sync="#tokens:replace">');
     expect(table).toContain('class="empty"');
   });
 

@@ -3,6 +3,7 @@ import { handleProxy } from "./proxy";
 import type { Env } from "./types";
 import { handleWsProxy } from "./ws";
 
+export { TokenWriter } from "./tokens";
 export { UsEgress } from "./upstreams";
 
 export default {

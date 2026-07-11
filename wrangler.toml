@@ -20,9 +20,18 @@ id = "1b212581e15144fb9f931b221a8cc5cd"
 name = "US_EGRESS"
 class_name = "UsEgress"
 
+# Serializes admin token writes (KV alone has no atomic read-modify-write).
+[[durable_objects.bindings]]
+name = "TOKEN_WRITER"
+class_name = "TokenWriter"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["UsEgress"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TokenWriter"]
 
 # Per-token, per-colo limit keyed by token hash; `period` must be 10 or 60.
 # `namespace_id` is an arbitrary integer string unique to this ruleset.

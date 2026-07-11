@@ -16,6 +16,7 @@ export default defineConfig({
         kvNamespaces: ["TOKENS"],
         durableObjects: {
           US_EGRESS: { className: "UsEgress", useSQLite: true },
+          TOKEN_WRITER: { className: "TokenWriter", useSQLite: true },
         },
         bindings: {
           OPENAI_API_KEY: "real-openai-key-FAKE",

@@ -3,14 +3,8 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { secureHeaders } from "hono/secure-headers";
 import { timingSafeEqual } from "hono/utils/buffer";
-import {
-  createToken,
-  deleteToken,
-  listTokens,
-  setTokenStatus,
-  sha256hex,
-} from "../tokens";
-import type { CoarseProvider, Env } from "../types";
+import { listTokens, luKey, mintToken, sha256hex } from "../tokens";
+import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
   dashboardPage,
@@ -33,6 +27,16 @@ const parseProviders = (fd: FormData): CoarseProvider[] =>
     .filter((p): p is CoarseProvider =>
       VALID_PROVIDERS.includes(p as CoarseProvider),
     );
+
+// Normalized ISO for a valid value, undefined for blank, null for a malformed or
+// offset-less value (which would parse in the runtime's local tz, not the admin's).
+const parseExpiry = (raw: string): string | null | undefined => {
+  if (!raw.trim()) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) || !/(Z|[+-]\d{2}:\d{2})$/i.test(raw.trim())
+    ? null
+    : d.toISOString();
+};
 
 const app = new Hono<{ Bindings: Env }>().basePath("/admin");
 
@@ -117,21 +121,17 @@ app.post("/api/tokens", async (c) => {
     if (await c.env.TOKENS.get(await sha256hex(custom)))
       return c.text("token already exists - delete it first", 409);
   }
-  const rawExp = String(fd.get("expiresAt") || "").trim();
-  let expiresAt: string | undefined;
-  if (rawExp) {
-    // The browser submits UTC ISO; an offset-less value would parse in the runtime's local tz, so reject it.
-    const d = new Date(rawExp);
-    if (Number.isNaN(d.getTime()) || !/(Z|[+-]\d{2}:\d{2})$/i.test(rawExp))
-      return c.text("invalid expiry", 400);
-    expiresAt = d.toISOString();
-  }
-  const { token, hash, meta } = await createToken(c.env.TOKENS, {
+  const expiresAt = parseExpiry(String(fd.get("expiresAt") || ""));
+  if (expiresAt === null) return c.text("invalid expiry", 400);
+  const { token, hash, meta } = await mintToken({
     label,
     providers,
     token: custom || undefined,
     expiresAt,
   });
+  // Creating through the writer seeds its merge base, so the first edit of a fresh
+  // token never depends on a KV read (no read-your-write guarantee).
+  await c.env.TOKEN_WRITER.getByName(hash).create(hash, meta);
   // KV list() can lag by 60 seconds or more, so return the new row out-of-band.
   return c.html(
     html`${createdNotice(token, providers, new URL(c.req.url).origin)}
@@ -142,18 +142,33 @@ app.post("/api/tokens", async (c) => {
 app.put("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
-  const status = String((await c.req.formData()).get("status"));
-  if (status !== "active" && status !== "disabled")
-    return c.text("bad status", 400);
-  const meta = await setTokenStatus(c.env.TOKENS, hash, status);
+  const fd = await c.req.formData();
+  const patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">> = {};
+  if (fd.has("status")) {
+    const status = String(fd.get("status"));
+    if (status !== "active" && status !== "disabled")
+      return c.text("bad status", 400);
+    patch.status = status;
+  }
+  if (fd.has("expiresAt")) {
+    const expiresAt = parseExpiry(String(fd.get("expiresAt")));
+    if (expiresAt === null) return c.text("invalid expiry", 400);
+    patch.expiresAt = expiresAt; // undefined = never expires
+  }
+  if (!Object.keys(patch).length) return c.text("nothing to update", 400);
+  // lastUsed is cosmetic: read it in parallel and never fail a committed patch over it.
+  const [meta, lastUsed] = await Promise.all([
+    c.env.TOKEN_WRITER.getByName(hash).patch(hash, patch),
+    c.env.TOKENS.get(luKey(hash)).catch(() => null),
+  ]);
   if (!meta) return c.text("not found", 404);
-  return c.html(tokenRow({ hash, ...meta }));
+  return c.html(tokenRow({ hash, ...meta, lastUsed: lastUsed ?? undefined }));
 });
 
 app.delete("/api/tokens/:hash", async (c) => {
   const hash = c.req.param("hash");
   if (!isHash(hash)) return c.text("bad token id", 400);
-  await deleteToken(c.env.TOKENS, hash);
+  await c.env.TOKEN_WRITER.getByName(hash).remove(hash);
   return c.body("", 200);
 });
 

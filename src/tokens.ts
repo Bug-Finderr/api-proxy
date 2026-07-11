@@ -1,5 +1,6 @@
 // Tokens are keyed by SHA-256(token); the plaintext is never persisted.
-import type { CoarseProvider, TokenMetadata } from "./types";
+import { DurableObject } from "cloudflare:workers";
+import type { CoarseProvider, Env, TokenMetadata } from "./types";
 
 export async function sha256hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -20,8 +21,7 @@ export interface CreateInput {
   expiresAt?: string;
 }
 
-export async function createToken(
-  kv: KVNamespace,
+export async function mintToken(
   input: CreateInput,
 ): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
   const token = input.token || generateToken();
@@ -34,12 +34,20 @@ export async function createToken(
     createdAt: new Date().toISOString(),
     expiresAt: input.expiresAt,
   };
-  await kv.put(hash, JSON.stringify(meta));
   return { token, hash, meta };
 }
 
+export async function createToken(
+  kv: KVNamespace,
+  input: CreateInput,
+): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
+  const minted = await mintToken(input);
+  await kv.put(minted.hash, JSON.stringify(minted.meta));
+  return minted;
+}
+
 // Own key so stamping never rewrites (or resurrects) a record the admin is concurrently disabling.
-const luKey = (hash: string) => `${hash}:lu`;
+export const luKey = (hash: string) => `${hash}:lu`;
 
 export type TokenRow = TokenMetadata & { hash: string; lastUsed?: string };
 
@@ -79,25 +87,6 @@ export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   });
 }
 
-export async function setTokenStatus(
-  kv: KVNamespace,
-  hash: string,
-  status: TokenMetadata["status"],
-): Promise<TokenMetadata | null> {
-  const meta = parseMeta(await kv.get(hash));
-  if (!meta) return null;
-  const updated = { ...meta, status };
-  await kv.put(hash, JSON.stringify(updated));
-  return updated;
-}
-
-export async function deleteToken(
-  kv: KVNamespace,
-  hash: string,
-): Promise<void> {
-  await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
-}
-
 // Record the first observed use per UTC day and isolate, limiting KV writes.
 const luStampedDay = new Map<string, string>();
 
@@ -115,5 +104,69 @@ export async function touchLastUsed(
     // Release the claim so a later request can retry today.
     luStampedDay.delete(hash);
     console.warn("lastUsed stamp failed", err);
+  }
+}
+
+// KV has no atomic read-modify-write and does not even guarantee read-your-write, so
+// mutations are serialized through one DO instance per hash whose own storage is the
+// merge base; KV is written through for the proxy's hot-path reads and never merged
+// from once this instance has state (a stale KV echo once resurrected a disabled token).
+export class TokenWriter extends DurableObject<Env> {
+  private queue: Promise<unknown> = Promise.resolve();
+  private run<T>(job: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(job, job);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  create(hash: string, meta: TokenMetadata): Promise<void> {
+    return this.run(async () => {
+      await this.ctx.storage.delete("deleted");
+      await this.ctx.storage.put("meta", meta);
+      await this.env.TOKENS.put(hash, JSON.stringify(meta));
+    });
+  }
+
+  patch(
+    hash: string,
+    patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
+  ): Promise<TokenMetadata | null> {
+    return this.run(async () => {
+      let base = await this.ctx.storage.get<TokenMetadata>("meta");
+      if (!base) {
+        // Pre-writer hashes bootstrap from KV; a tombstone marks any KV record
+        // as a stale echo of a deleted token (recreation re-seeds via create()).
+        const kvMeta = parseMeta(await this.env.TOKENS.get(hash));
+        base =
+          kvMeta && !(await this.ctx.storage.get("deleted"))
+            ? kvMeta
+            : undefined;
+      }
+      if (!base) return null;
+      // An explicit `expiresAt: undefined` clears it: JSON.stringify drops the key.
+      const updated = { ...base, ...patch };
+      await this.ctx.storage.put("meta", updated);
+      try {
+        await this.env.TOKENS.put(hash, JSON.stringify(updated));
+      } catch (err) {
+        // Keep the merge base honest: a failed KV write must not replay silently later.
+        await this.ctx.storage.put("meta", base);
+        throw err;
+      }
+      return updated;
+    });
+  }
+
+  remove(hash: string): Promise<void> {
+    return this.run(async () => {
+      // KV first: if these throw, nothing is tombstoned and the retry starts clean
+      // (a tombstoned-but-live record would 404 every subsequent disable attempt).
+      await Promise.all([
+        this.env.TOKENS.delete(hash),
+        this.env.TOKENS.delete(luKey(hash)),
+      ]);
+      await this.ctx.storage.delete("meta");
+      await this.ctx.storage.put("deleted", true);
+    });
   }
 }

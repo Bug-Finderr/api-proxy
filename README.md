@@ -76,7 +76,7 @@ Visit `https://<worker>/admin`, sign in with `ADMIN_SECRET`, and create tokens w
 
 ## Per-token controls
 
-- **Expiry** - optionally set an expiry at creation; past it the token is rejected and the dashboard shows it as `expired`.
+- **Expiry** - optionally set or edit an expiry; past it the token is rejected and the dashboard shows it as `expired`.
 - **Rate limit** - each token is capped at 100 requests / 60s (`429` + `Retry-After` over the limit). Tune `[[ratelimits]]` in `wrangler.toml`. It is a per-location, loose ceiling for abuse protection, not a strict quota.
 - **Scope & revoke** - a token only reaches the providers you check; disable or delete to revoke (KV changes can take 60 seconds or more to reach other locations).
 
@@ -111,7 +111,7 @@ uv pip install -r test/requirements.txt
 
 ## Cost
 
-The Worker and SQLite Durable Object have separate allowances. Cloudflare's Free Durable Object tier lists **100,000 requests/day** and **13,000 GB-s/day** (pricing page updated 2026-06-19). Each OpenAI geo-block fallback consumes one DO request, and its execution contributes to active duration. See [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/); upstream API usage is billed by the provider.
+The Worker and SQLite Durable Object have separate allowances. Cloudflare's Free Durable Object tier lists **100,000 requests/day** and **13,000 GB-s/day** (pricing page updated 2026-06-19). Each OpenAI geo-block fallback consumes one DO request, and its execution contributes to active duration; each admin token edit or delete adds one `TokenWriter` DO request. See [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/); upstream API usage is billed by the provider.
 
 ## Contributing
 

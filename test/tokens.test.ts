@@ -4,7 +4,6 @@ import {
   createToken,
   generateToken,
   listTokens,
-  setTokenStatus,
   sha256hex,
   touchLastUsed,
 } from "../src/tokens";
@@ -46,7 +45,7 @@ describe("createToken + getValidated", () => {
   });
 });
 
-describe("listTokens / setTokenStatus / deleteToken", () => {
+describe("listTokens", () => {
   it("lists created tokens by hash with metadata", async () => {
     await createToken(env.TOKENS, {
       label: "L1",
@@ -120,12 +119,12 @@ describe("touchLastUsed", () => {
   });
 
   it("does not resurrect a disabled token when lastUsed is stamped", async () => {
-    const { token, hash } = await createToken(env.TOKENS, {
+    const { token, hash, meta } = await createToken(env.TOKENS, {
       label: "rev",
       providers: ["openai"],
       token: "to-revoke",
     });
-    await setTokenStatus(env.TOKENS, hash, "disabled");
+    await env.TOKENS.put(hash, JSON.stringify({ ...meta, status: "disabled" }));
     await touchLastUsed(env.TOKENS, hash);
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });
