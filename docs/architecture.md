@@ -106,7 +106,7 @@ type TokenMetadata = {
 - **Tokens** are opaque: `ptk_` + 32 url-safe chars (24 random bytes). Custom admin-typed tokens are allowed; validation is by hash of the full string.
 - **Validation** (`getValidatedByHash`): returns the record only if `status === "active"` AND, when `expiresAt` is set, it parses to a future timestamp - malformed or past expiry is rejected **fail-closed**. Not KV `expirationTtl` - why: [`token-expiry-check-at-validate.md`](learnings/token-expiry-check-at-validate.md).
 - **`lastUsed`** is a separate `<hash>:lu` key. The first qualifying use per token/day/isolate schedules a stamp: either an authorized HTTP request that receives any upstream response or a successful WebSocket upgrade. The dashboard localizes the stored ISO timestamp. See [`proxy-token-security.md`](learnings/proxy-token-security.md) and [`kv-free-tier-write-quota.md`](learnings/kv-free-tier-write-quota.md).
-- **Lifecycle:** `createToken`, `listTokens` (one `kv.list` page plus batched multi-key reads), `TokenWriter.patch`/`.remove` (status and/or expiry; delete covers the record + `:lu`). Changes can take 60 seconds or more to become visible in other locations.
+- **Lifecycle:** admin creation uses `mintToken` + `TokenWriter.create`; `listTokens` performs one `kv.list` page plus batched multi-key reads; `TokenWriter.patch`/`.remove` handle status, expiry, and deletion (record + `:lu`). Changes can take 60 seconds or more to become visible in other locations.
 
 ```mermaid
 stateDiagram-v2
@@ -184,7 +184,7 @@ Embedded **Hono** sub-app at `/admin` (`src/admin/`), server-rendered HTML via `
 
 - **Auth:** one `ADMIN_SECRET` password. `POST /admin/login` is rate-limited per client IP (dedicated `LOGIN_LIMITER`, 10/60s, fail-open) and compared in constant time (hono's `timingSafeEqual`, which hashes both sides with SHA-256); failures are logged. Success sets a signed cookie via `hono/cookie` (`setSignedCookie`: HMAC-SHA-256 over the issue timestamp, `Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`). A middleware guards every `/admin/*` route except login; `getSignedCookie` verifies in constant time (`crypto.subtle.verify`) and the guard re-checks the 24h age server-side, so a client ignoring `Max-Age` gains nothing. Tampered/expired cookies are pinned by negative-path tests.
 - **CRUD:** `GET`, `POST`, `PUT`, and `DELETE` under `/admin/api/tokens`. Hash params must be 64-hex; provider scope and status are whitelisted; custom tokens need at least 12 characters. `PUT` patches status and/or expiry - a blank expiry clears it (never expires). Creation, patches, and deletes are serialized through a per-hash `TokenWriter` Durable Object whose own storage is the merge base (KV guarantees neither atomic read-modify-write nor read-your-write, so merging from a KV read let a stale expiry patch resurrect a disabled token); KV is written through for the hot path, only pre-writer hashes bootstrap from a KV read, a deletion tombstone blocks stale echoes, and recreation clears it. Creation checks for an existing hash and returns 409, but KV offers no transaction across that read and write, so concurrent identical creations are not an atomic uniqueness guarantee.
-- **UI:** creation returns the plaintext once, base URLs, and an out-of-band row; `PUT` returns a replacement row; `DELETE` returns an empty 200 body. The table localizes expiry and `lastUsed`, marks expired rows, edits expiry in place (click or focus+Enter on the cell, pick a local datetime, saved as UTC ISO exactly as picked - a past pick renders as an expired row immediately; the poll pauses while an editor is focused), loads immediately, and refreshes every 120 seconds while visible; the poll and row actions share one `hx-sync` scope on the persistent `#tokens` container so a stale in-flight poll response cannot overwrite a newer row swap, and in-flight rows dim and ignore further clicks (`hx-indicator`). The immediate POST row avoids waiting for KV propagation, which can take 60 seconds or more in other locations.
+- **UI:** creation returns the plaintext once, base URLs, and an out-of-band row; `PUT` returns a replacement row; `DELETE` returns an empty 200 body. The table localizes expiry and `lastUsed`, marks expired rows, edits expiry in place (click or focus+Enter on the cell, pick a local datetime, saved as UTC ISO exactly as picked - a past pick renders as an expired row immediately; the poll pauses while an editor is focused), loads immediately, and refreshes every 120 seconds while visible. Polls and mutations share the persistent `#tokens` sync scope; in-flight rows dim but stay clickable so same-row gestures reach the writer. A different row's mutation can abort the earlier row swap, leaving that cell stale until the next poll. The immediate POST row avoids waiting for KV propagation, which can take 60 seconds or more in other locations.
 - **Errors surface:** a body-level `hx-on::response-error` writes failures into a flash div (htmx swaps nothing on non-2xx by default - previously a wrong password or an expired session silently no-opped), and a 401 mid-session bounces back to the login page.
 
 ## 12. Real key handling
@@ -223,7 +223,7 @@ nubx wrangler secret put OPENAI_API_KEY              # + ANTHROPIC / GEMINI / AD
 nubx wrangler deploy
 ```
 
-See the README's [cost note](../README.md#cost): fallback traffic consumes Durable Object request and duration allowance as well as the Worker request.
+See the README's [cost note](../README.md#cost): OpenAI fallbacks and admin token mutations consume Durable Object request and duration allowance as well as the Worker request.
 
 ## 16. Security model
 
@@ -231,5 +231,5 @@ Invariants are detailed in §5 (auth swap), §6 (token hashing, revoke-safe `las
 
 Caveats:
 
-- KV-backed create, revoke, and status changes can take 60 seconds or more to appear in another location; rotate the provider credential when a provider-wide cutoff cannot wait for KV propagation.
+- KV-backed create, revoke, status, and expiry changes can take 60 seconds or more to appear in another location; rotate the provider credential when a provider-wide cutoff cannot wait for KV propagation.
 - Do not host on `*.openai.azure.com` / `*.cognitiveservices.azure.com` (the OpenAI SDK switches to Azure auth on those hostnames).
