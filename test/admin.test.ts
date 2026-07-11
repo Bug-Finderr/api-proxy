@@ -395,7 +395,7 @@ describe("admin token CRUD", () => {
     // Input-time snap: a picker "Today" fill becomes 23:59 in the field; typed times don't match.
     expect(page).toContain("t.value.slice(0, 11) + '23:59'");
     expect(page).toContain(
-      "if (!t.closest('#rows')) { t.blur(); try { t.showPicker() } catch {} }",
+      "if (t.closest('#rows')) htmx.trigger(t, 'commit'); else { t.blur(); try { t.showPicker() } catch {} }",
     );
     // The poll and row mutations share one persistent sync scope (in-flight polls
     // must never overwrite a newer row swap).
