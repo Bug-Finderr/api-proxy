@@ -38,7 +38,8 @@ tr.empty:not(:only-child){display:none}
 .notice code{display:block;background:#04140c;padding:8px 10px;border-radius:6px;margin-top:6px;word-break:break-all}
 .copy{cursor:pointer}
 .copy.copied::after{content:"✓";float:right;color:#74e0bb}
-.edit{cursor:pointer}
+.edit{background:none;border:0;padding:0;font:inherit;cursor:pointer}
+tr.htmx-request button{pointer-events:none;opacity:.5}
 .edit:hover{text-decoration:underline dotted}
 td input[type=datetime-local]{width:auto;padding:4px 6px;font-size:12px}
 .danger{color:#f08a8a;border-color:#5c2a2a}
@@ -73,23 +74,24 @@ export const tokenRow = (r: TokenRow) => {
 		<td>${providerPills(r.providers)}</td>
 		<td class="muted">${r.status}</td>
 		<td>
-			<span
+			<button
 				class="edit ${expired ? "danger" : "muted"}"
-				role="button"
-				tabindex="0"
-				title="click to edit expiry"
+				title="edit expiry"
 				data-iso="${r.expiresAt ?? ""}"
-				>${expired ? "expired" : localTime(r.expiresAt)}</span
 			>
+				${expired ? "expired" : localTime(r.expiresAt)}
+			</button>
 			<input
 				type="datetime-local"
 				name="expiresAt"
+				aria-label="expiry"
 				style="display:none"
 				hx-put="/admin/api/tokens/${r.hash}"
 				hx-trigger="change"
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr"
+				hx-sync="closest tr:queue all"
+				hx-indicator="closest tr"
 			/>
 		</td>
 		<td class="muted">${localTime(r.lastUsed)}</td>
@@ -100,7 +102,8 @@ export const tokenRow = (r: TokenRow) => {
 				hx-vals='{"status":"${r.status === "active" ? "disabled" : "active"}"}'
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr"
+				hx-sync="closest tr:queue all"
+				hx-indicator="closest tr"
 			>
 				${r.status === "active" ? "disable" : "enable"}
 			</button>
@@ -109,7 +112,8 @@ export const tokenRow = (r: TokenRow) => {
 				hx-delete="/admin/api/tokens/${r.hash}"
 				hx-target="#tok-${r.hash}"
 				hx-swap="outerHTML"
-				hx-sync="closest tr"
+				hx-sync="closest tr:queue all"
+				hx-indicator="closest tr"
 				hx-confirm="Delete this token?"
 			>
 				delete
@@ -194,10 +198,9 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
-			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('span.edit'); if (e) { const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; try { i.showPicker() } catch {} i.focus() }"
-			hx-on:keydown="if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('span.edit')) { event.preventDefault(); event.target.click() }"
+			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('button.edit'); if (e) { const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; try { i.showPicker() } catch {} i.focus() }"
 			hx-on:focusout="const t = event.target; if (t.matches('#rows input[type=datetime-local]')) { t.style.display = 'none'; t.previousElementSibling.style.display = '' }"
-			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) { if (p.expiresAt.slice(11) === new Date().toTimeString().slice(0, 5)) p.expiresAt = p.expiresAt.slice(0, 11) + '23:59'; p.expiresAt = new Date(p.expiresAt).toISOString() }"
+			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) { const d = new Date(p.expiresAt); const n = new Date(); if (d <= n && d.toDateString() === n.toDateString()) p.expiresAt = p.expiresAt.slice(0, 11) + '23:59'; p.expiresAt = new Date(p.expiresAt).toISOString() }"
 		>
 			<div class="wrap">
 				<div class="bar">

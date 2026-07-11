@@ -33,7 +33,7 @@ HANDOFF.md
 
 # wrangler local state / build cache
 .wrangler
-.dev.vars
+.dev.vars*
 
 # playwright artifacts
 .playwright-mcp

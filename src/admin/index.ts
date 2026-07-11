@@ -160,10 +160,13 @@ app.put("/api/tokens/:hash", async (c) => {
     patch.expiresAt = expiresAt; // undefined = never expires
   }
   if (!Object.keys(patch).length) return c.text("nothing to update", 400);
-  const meta = await patchToken(c.env.TOKENS, hash, patch);
+  // lastUsed is cosmetic: read it in parallel and never fail a committed patch over it.
+  const [meta, lastUsed] = await Promise.all([
+    patchToken(c.env.TOKENS, hash, patch),
+    c.env.TOKENS.get(luKey(hash)).catch(() => null),
+  ]);
   if (!meta) return c.text("not found", 404);
-  const lastUsed = (await c.env.TOKENS.get(luKey(hash))) ?? undefined;
-  return c.html(tokenRow({ hash, ...meta, lastUsed }));
+  return c.html(tokenRow({ hash, ...meta, lastUsed: lastUsed ?? undefined }));
 });
 
 app.delete("/api/tokens/:hash", async (c) => {

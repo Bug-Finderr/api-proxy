@@ -178,7 +178,7 @@ describe("admin token CRUD", () => {
     // Each row carries a click-to-edit expiry editor (behavior is delegated at the body).
     expect(table).toContain('hx-trigger="change"');
     expect(table).toContain('data-iso="2030-01-01T00:00:00.000Z"');
-    expect(table).toContain('hx-sync="closest tr"');
+    expect(table).toContain('hx-sync="closest tr:queue all"');
 
     const bad = await call("/admin/api/tokens", {
       ...form(
@@ -226,7 +226,7 @@ describe("admin token CRUD", () => {
     );
     expect(past.status).toBe(200);
     const row = await past.text();
-    expect(row).toContain(">expired</span");
+    expect(row).toContain('class="edit danger"');
     // The swapped row must keep the separately stored lastUsed, not reset it to "never".
     expect(row).toContain('datetime="2026-07-01T00:00:00.000Z"');
     expect(await getValidated(env.TOKENS, "edit-expiry-token")).toBe("expired");
