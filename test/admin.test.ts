@@ -237,6 +237,8 @@ describe("admin token CRUD", () => {
       cookie,
     );
     expect(cleared.status).toBe(200);
+    // Clearing drops the key from the stored JSON entirely (never expires).
+    expect(await env.TOKENS.get(hash)).not.toContain("expiresAt");
     expect(await getValidated(env.TOKENS, "edit-expiry-token")).toMatchObject({
       status: "active",
     });
@@ -265,6 +267,52 @@ describe("admin token CRUD", () => {
       ]);
       expect(await getValidated(env.TOKENS, "race-check-token")).toBeNull();
     }
+  });
+
+  it("merges from the writer's own storage, not a stale KV echo", async () => {
+    const cookie = await login();
+    const res = await call("/admin/api/tokens", {
+      ...form(
+        { label: "stale", providers: "openai", token: "stale-echo-token" },
+        cookie,
+      ),
+    });
+    expect(res.status).toBe(200);
+    const hash = await sha256hex("stale-echo-token");
+    await put(`/admin/api/tokens/${hash}`, { status: "disabled" }, cookie);
+    // Simulate KV serving a stale pre-disable record (KV has no read-your-write guarantee).
+    const stale = JSON.parse((await env.TOKENS.get(hash))!);
+    await env.TOKENS.put(hash, JSON.stringify({ ...stale, status: "active" }));
+    await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2040-01-01T00:00:00.000Z" },
+      cookie,
+    );
+    expect(await getValidated(env.TOKENS, "stale-echo-token")).toBeNull();
+  });
+
+  it("does not resurrect a deleted token from a stale KV echo (tombstone)", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "tomb", providers: "openai", token: "tombstone-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("tombstone-token");
+    const record = (await env.TOKENS.get(hash))!;
+    await call(`/admin/api/tokens/${hash}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    // The stale record resurfaces after the delete; a patch must not resurrect it.
+    await env.TOKENS.put(hash, record);
+    const res = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "active" },
+      cookie,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("400s an invalid expiry patch and a PUT with nothing to update", async () => {

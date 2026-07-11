@@ -80,26 +80,6 @@ export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   });
 }
 
-export async function patchToken(
-  kv: KVNamespace,
-  hash: string,
-  patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
-): Promise<TokenMetadata | null> {
-  const meta = parseMeta(await kv.get(hash));
-  if (!meta) return null;
-  // An explicit `expiresAt: undefined` clears it: JSON.stringify drops the key.
-  const updated = { ...meta, ...patch };
-  await kv.put(hash, JSON.stringify(updated));
-  return updated;
-}
-
-export async function deleteToken(
-  kv: KVNamespace,
-  hash: string,
-): Promise<void> {
-  await Promise.all([kv.delete(hash), kv.delete(luKey(hash))]);
-}
-
 // Record the first observed use per UTC day and isolate, limiting KV writes.
 const luStampedDay = new Map<string, string>();
 
@@ -120,9 +100,10 @@ export async function touchLastUsed(
   }
 }
 
-// KV has no atomic read-modify-write, so admin mutations are serialized through one
-// DO instance per hash: each merge follows its own prior write instead of a possibly
-// stale read, which is what let an expiry edit resurrect a concurrently disabled token.
+// KV has no atomic read-modify-write and does not even guarantee read-your-write, so
+// mutations are serialized through one DO instance per hash whose own storage is the
+// merge base; KV is written through for the proxy's hot-path reads and never merged
+// from once this instance has state (a stale KV echo once resurrected a disabled token).
 export class TokenWriter extends DurableObject<Env> {
   private queue: Promise<unknown> = Promise.resolve();
   private run<T>(job: () => Promise<T>): Promise<T> {
@@ -130,13 +111,38 @@ export class TokenWriter extends DurableObject<Env> {
     this.queue = next.catch(() => {});
     return next;
   }
+
   patch(
     hash: string,
     patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
-  ) {
-    return this.run(() => patchToken(this.env.TOKENS, hash, patch));
+  ): Promise<TokenMetadata | null> {
+    return this.run(async () => {
+      let base = await this.ctx.storage.get<TokenMetadata>("meta");
+      if (!base) {
+        // First contact: bootstrap from KV - unless a tombstone marks the KV record
+        // as a stale echo of a deleted token (a recreation has a newer createdAt).
+        const tomb = await this.ctx.storage.get<string>("deleted");
+        const kvMeta = parseMeta(await this.env.TOKENS.get(hash));
+        base =
+          kvMeta && (!tomb || kvMeta.createdAt > tomb) ? kvMeta : undefined;
+      }
+      if (!base) return null;
+      // An explicit `expiresAt: undefined` clears it: JSON.stringify drops the key.
+      const updated = { ...base, ...patch };
+      await this.ctx.storage.put("meta", updated);
+      await this.env.TOKENS.put(hash, JSON.stringify(updated));
+      return updated;
+    });
   }
-  remove(hash: string) {
-    return this.run(() => deleteToken(this.env.TOKENS, hash));
+
+  remove(hash: string): Promise<void> {
+    return this.run(async () => {
+      await this.ctx.storage.delete("meta");
+      await this.ctx.storage.put("deleted", new Date().toISOString());
+      await Promise.all([
+        this.env.TOKENS.delete(hash),
+        this.env.TOKENS.delete(luKey(hash)),
+      ]);
+    });
   }
 }

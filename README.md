@@ -111,7 +111,7 @@ uv pip install -r test/requirements.txt
 
 ## Cost
 
-The Worker and SQLite Durable Object have separate allowances. Cloudflare's Free Durable Object tier lists **100,000 requests/day** and **13,000 GB-s/day** (pricing page updated 2026-06-19). Each OpenAI geo-block fallback consumes one DO request, and its execution contributes to active duration. See [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/); upstream API usage is billed by the provider.
+The Worker and SQLite Durable Object have separate allowances. Cloudflare's Free Durable Object tier lists **100,000 requests/day** and **13,000 GB-s/day** (pricing page updated 2026-06-19). Each OpenAI geo-block fallback consumes one DO request, and its execution contributes to active duration; each admin token edit or delete adds one `TokenWriter` DO request. See [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/); upstream API usage is billed by the provider.
 
 ## Contributing
 
