@@ -93,7 +93,7 @@ export const tokenRow = (r: TokenRow) => {
 				aria-label="expiry"
 				style="display:none"
 				hx-put="/admin/api/tokens/${r.hash}"
-				hx-trigger="change"
+				hx-trigger="commit"
 			/>
 		</td>
 		<td class="muted">${localTime(r.lastUsed)}</td>
@@ -192,8 +192,9 @@ export const dashboardPage = () => html`<!doctype html>
 			hx-on::send-error="document.getElementById('flash').textContent = 'network error - proxy unreachable'"
 			hx-on::after-request="if (event.detail.successful && event.detail.requestConfig.verb !== 'get') document.getElementById('flash').textContent = ''"
 			hx-on::after-settle="for (const t of document.querySelectorAll('time[datetime]')) t.textContent = new Date(t.getAttribute('datetime')).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })"
-			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('button.edit'); if (e) { htmx.trigger('#tokens', 'htmx:abort'); const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; try { i.showPicker() } catch {} i.focus() }"
-			hx-on:focusout="const t = event.target; if (t.matches('#rows input[type=datetime-local]')) { t.style.display = 'none'; t.previousElementSibling.style.display = '' }"
+			hx-on:click="const c = event.target.closest('code.copy'); if (c) navigator.clipboard.writeText(c.textContent).then(() => { c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 1000) }); const e = event.target.closest('button.edit'); if (e) { htmx.trigger('#tokens', 'htmx:abort'); const i = e.nextElementSibling; e.style.display = 'none'; i.style.display = ''; const d = new Date(e.dataset.iso); i.value = e.dataset.iso ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''; i.dataset.prefill = i.value; try { i.showPicker() } catch {} i.focus() }"
+			hx-on:input="const t = event.target; if (t.type === 'datetime-local' && t.value.slice(11) === new Date().toTimeString().slice(0, 5)) { t.value = t.value.slice(0, 11) + '23:59'; if (!t.closest('#rows')) { t.blur(); try { t.showPicker() } catch {} } }"
+			hx-on:focusout="const t = event.target; if (t.matches('#rows input[type=datetime-local]')) { if (t.value !== t.dataset.prefill) htmx.trigger(t, 'commit'); t.style.display = 'none'; t.previousElementSibling.style.display = '' }"
 			hx-on::config-request="const p = event.detail.parameters; if (p.expiresAt) p.expiresAt = new Date(p.expiresAt).toISOString()"
 		>
 			<div class="wrap">

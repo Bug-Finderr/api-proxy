@@ -176,7 +176,7 @@ describe("admin token CRUD", () => {
     expect(table).toContain('datetime="2030-01-01T00:00:00.000Z"');
     expect(table).toContain("2030-01-01 00:00 UTC");
     // Each row carries a click-to-edit expiry editor (behavior is delegated at the body).
-    expect(table).toContain('hx-trigger="change"');
+    expect(table).toContain('hx-trigger="commit"');
     expect(table).toContain('data-iso="2030-01-01T00:00:00.000Z"');
     expect(table).toContain('hx-indicator="closest tr"');
 
@@ -390,8 +390,13 @@ describe("admin token CRUD", () => {
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    // One body-level converter serves every datetime-local; values save exactly as picked.
+    // One body-level converter serves every datetime-local.
     expect(page).toContain("p.expiresAt = new Date(p.expiresAt).toISOString()");
+    // Input-time snap: a picker "Today" fill becomes 23:59 in the field; typed times don't match.
+    expect(page).toContain("t.value.slice(0, 11) + '23:59'");
+    expect(page).toContain(
+      "if (!t.closest('#rows')) { t.blur(); try { t.showPicker() } catch {} }",
+    );
     // The poll and row mutations share one persistent sync scope (in-flight polls
     // must never overwrite a newer row swap).
     expect(page).toContain('id="tokens" hx-sync="this:drop"');
