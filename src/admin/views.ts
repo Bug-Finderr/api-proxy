@@ -39,7 +39,7 @@ tr.empty:not(:only-child){display:none}
 .copy{cursor:pointer}
 .copy.copied::after{content:"✓";float:right;color:#74e0bb}
 .edit{background:none;border:0;padding:0;font:inherit;cursor:pointer}
-tr.htmx-request button{pointer-events:none;opacity:.5}
+tr.htmx-request button{opacity:.5}
 .edit:hover{text-decoration:underline dotted}
 td input[type=datetime-local]{width:auto;padding:4px 6px;font-size:12px}
 .danger{color:#f08a8a;border-color:#5c2a2a}
@@ -68,7 +68,13 @@ const localTime = (iso?: string) =>
 export const tokenRow = (r: TokenRow) => {
   const expired = !!r.expiresAt && Date.parse(r.expiresAt) <= Date.now();
   return html`
-	<tr id="tok-${r.hash}" class="${r.status === "disabled" || expired ? "disabled" : ""}">
+	<tr
+		id="tok-${r.hash}"
+		class="${r.status === "disabled" || expired ? "disabled" : ""}"
+		hx-target="closest tr"
+		hx-swap="outerHTML"
+		hx-indicator="closest tr"
+	>
 		<td class="mono">${r.label || "(no label)"}</td>
 		<td class="mono muted">…${r.last4}</td>
 		<td>${providerPills(r.providers)}</td>
@@ -88,9 +94,6 @@ export const tokenRow = (r: TokenRow) => {
 				style="display:none"
 				hx-put="/admin/api/tokens/${r.hash}"
 				hx-trigger="change"
-				hx-target="#tok-${r.hash}"
-				hx-swap="outerHTML"
-				hx-indicator="closest tr"
 			/>
 		</td>
 		<td class="muted">${localTime(r.lastUsed)}</td>
@@ -99,18 +102,12 @@ export const tokenRow = (r: TokenRow) => {
 				class="ghost"
 				hx-put="/admin/api/tokens/${r.hash}"
 				hx-vals='{"status":"${r.status === "active" ? "disabled" : "active"}"}'
-				hx-target="#tok-${r.hash}"
-				hx-swap="outerHTML"
-				hx-indicator="closest tr"
 			>
 				${r.status === "active" ? "disable" : "enable"}
 			</button>
 			<button
 				class="ghost danger"
 				hx-delete="/admin/api/tokens/${r.hash}"
-				hx-target="#tok-${r.hash}"
-				hx-swap="outerHTML"
-				hx-indicator="closest tr"
 				hx-confirm="Delete this token?"
 			>
 				delete
@@ -211,6 +208,7 @@ export const dashboardPage = () => html`<!doctype html>
 						method="post"
 						action="/admin/api/tokens"
 						hx-post="/admin/api/tokens"
+						hx-sync="#tokens:replace"
 						hx-target="#created"
 						hx-swap="innerHTML"
 						hx-on::after-request="if(event.detail.successful) this.reset()"

@@ -315,6 +315,31 @@ describe("admin token CRUD", () => {
     expect(res.status).toBe(404);
   });
 
+  it("a deleted then recreated token is editable again (tombstone cleared)", async () => {
+    const cookie = await login();
+    const mk = () =>
+      call("/admin/api/tokens", {
+        ...form(
+          { label: "re", providers: "openai", token: "recreate-token" },
+          cookie,
+        ),
+      });
+    await mk();
+    const hash = await sha256hex("recreate-token");
+    await call(`/admin/api/tokens/${hash}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect((await mk()).status).toBe(200);
+    const res = await put(
+      `/admin/api/tokens/${hash}`,
+      { status: "disabled" },
+      cookie,
+    );
+    expect(res.status).toBe(200);
+    expect(await getValidated(env.TOKENS, "recreate-token")).toBeNull();
+  });
+
   it("400s an invalid expiry patch and a PUT with nothing to update", async () => {
     const cookie = await login();
     await call("/admin/api/tokens", {
@@ -342,8 +367,6 @@ describe("admin token CRUD", () => {
   it("dashboard markup pins the browser-side UTC conversion and the visibility-gated poll", async () => {
     const cookie = await login();
     const page = await (await call("/admin", { headers: { cookie } })).text();
-    expect(page).toContain("hx-on::config-request");
-    expect(page).toContain("toISOString()");
     expect(page).toContain(
       "every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']",
     );

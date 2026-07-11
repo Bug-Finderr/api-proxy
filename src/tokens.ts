@@ -21,8 +21,7 @@ export interface CreateInput {
   expiresAt?: string;
 }
 
-export async function createToken(
-  kv: KVNamespace,
+export async function mintToken(
   input: CreateInput,
 ): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
   const token = input.token || generateToken();
@@ -35,8 +34,16 @@ export async function createToken(
     createdAt: new Date().toISOString(),
     expiresAt: input.expiresAt,
   };
-  await kv.put(hash, JSON.stringify(meta));
   return { token, hash, meta };
+}
+
+export async function createToken(
+  kv: KVNamespace,
+  input: CreateInput,
+): Promise<{ token: string; hash: string; meta: TokenMetadata }> {
+  const minted = await mintToken(input);
+  await kv.put(minted.hash, JSON.stringify(minted.meta));
+  return minted;
 }
 
 // Own key so stamping never rewrites (or resurrects) a record the admin is concurrently disabling.
@@ -112,6 +119,14 @@ export class TokenWriter extends DurableObject<Env> {
     return next;
   }
 
+  create(hash: string, meta: TokenMetadata): Promise<void> {
+    return this.run(async () => {
+      await this.ctx.storage.delete("deleted");
+      await this.ctx.storage.put("meta", meta);
+      await this.env.TOKENS.put(hash, JSON.stringify(meta));
+    });
+  }
+
   patch(
     hash: string,
     patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
@@ -119,30 +134,39 @@ export class TokenWriter extends DurableObject<Env> {
     return this.run(async () => {
       let base = await this.ctx.storage.get<TokenMetadata>("meta");
       if (!base) {
-        // First contact: bootstrap from KV - unless a tombstone marks the KV record
-        // as a stale echo of a deleted token (a recreation has a newer createdAt).
-        const tomb = await this.ctx.storage.get<string>("deleted");
+        // Pre-writer hashes bootstrap from KV; a tombstone marks any KV record
+        // as a stale echo of a deleted token (recreation re-seeds via create()).
         const kvMeta = parseMeta(await this.env.TOKENS.get(hash));
         base =
-          kvMeta && (!tomb || kvMeta.createdAt > tomb) ? kvMeta : undefined;
+          kvMeta && !(await this.ctx.storage.get("deleted"))
+            ? kvMeta
+            : undefined;
       }
       if (!base) return null;
       // An explicit `expiresAt: undefined` clears it: JSON.stringify drops the key.
       const updated = { ...base, ...patch };
       await this.ctx.storage.put("meta", updated);
-      await this.env.TOKENS.put(hash, JSON.stringify(updated));
+      try {
+        await this.env.TOKENS.put(hash, JSON.stringify(updated));
+      } catch (err) {
+        // Keep the merge base honest: a failed KV write must not replay silently later.
+        await this.ctx.storage.put("meta", base);
+        throw err;
+      }
       return updated;
     });
   }
 
   remove(hash: string): Promise<void> {
     return this.run(async () => {
-      await this.ctx.storage.delete("meta");
-      await this.ctx.storage.put("deleted", new Date().toISOString());
+      // KV first: if these throw, nothing is tombstoned and the retry starts clean
+      // (a tombstoned-but-live record would 404 every subsequent disable attempt).
       await Promise.all([
         this.env.TOKENS.delete(hash),
         this.env.TOKENS.delete(luKey(hash)),
       ]);
+      await this.ctx.storage.delete("meta");
+      await this.ctx.storage.put("deleted", true);
     });
   }
 }

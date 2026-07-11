@@ -3,7 +3,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { secureHeaders } from "hono/secure-headers";
 import { timingSafeEqual } from "hono/utils/buffer";
-import { createToken, listTokens, luKey, sha256hex } from "../tokens";
+import { listTokens, luKey, mintToken, sha256hex } from "../tokens";
 import type { CoarseProvider, Env, TokenMetadata } from "../types";
 import {
   createdNotice,
@@ -123,12 +123,15 @@ app.post("/api/tokens", async (c) => {
   }
   const expiresAt = parseExpiry(String(fd.get("expiresAt") || ""));
   if (expiresAt === null) return c.text("invalid expiry", 400);
-  const { token, hash, meta } = await createToken(c.env.TOKENS, {
+  const { token, hash, meta } = await mintToken({
     label,
     providers,
     token: custom || undefined,
     expiresAt,
   });
+  // Creating through the writer seeds its merge base, so the first edit of a fresh
+  // token never depends on a KV read (no read-your-write guarantee).
+  await c.env.TOKEN_WRITER.getByName(hash).create(hash, meta);
   // KV list() can lag by 60 seconds or more, so return the new row out-of-band.
   return c.html(
     html`${createdNotice(token, providers, new URL(c.req.url).origin)}
