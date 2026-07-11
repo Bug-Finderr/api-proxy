@@ -5,7 +5,7 @@ import {
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { createToken, setTokenStatus, sha256hex } from "../src/tokens";
+import { createToken, patchToken, sha256hex } from "../src/tokens";
 import { fakeEgress, geo403, seed, setLimiter } from "./helpers";
 
 let captured: Request | null;
@@ -174,7 +174,7 @@ describe("auth failures (upstream never called)", () => {
       providers: ["openai"],
       token: "tk-disabled",
     });
-    await setTokenStatus(env.TOKENS, hash, "disabled");
+    await patchToken(env.TOKENS, hash, { status: "disabled" });
     const res = await call(
       new Request("https://proxy.example/v1/chat/completions", {
         method: "POST",

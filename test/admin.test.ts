@@ -175,6 +175,10 @@ describe("admin token CRUD", () => {
     ).text();
     expect(table).toContain('datetime="2030-01-01T00:00:00.000Z"');
     expect(table).toContain("2030-01-01 00:00 UTC");
+    // Each row carries a click-to-edit expiry editor (behavior is delegated at the body).
+    expect(table).toContain('hx-trigger="change"');
+    expect(table).toContain('data-iso="2030-01-01T00:00:00.000Z"');
+    expect(table).toContain('hx-sync="closest tr"');
 
     const bad = await call("/admin/api/tokens", {
       ...form(
@@ -204,12 +208,72 @@ describe("admin token CRUD", () => {
     expect(bare.status).toBe(400);
   });
 
+  it("edits expiry via PUT so the proxy honors it, and an empty value clears it", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "ee", providers: "openai", token: "edit-expiry-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("edit-expiry-token");
+    await env.TOKENS.put(`${hash}:lu`, "2026-07-01T00:00:00.000Z");
+
+    const past = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2020-01-01T00:00:00.000Z" },
+      cookie,
+    );
+    expect(past.status).toBe(200);
+    const row = await past.text();
+    expect(row).toContain(">expired</span");
+    // The swapped row must keep the separately stored lastUsed, not reset it to "never".
+    expect(row).toContain('datetime="2026-07-01T00:00:00.000Z"');
+    expect(await getValidated(env.TOKENS, "edit-expiry-token")).toBe("expired");
+
+    const cleared = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "" },
+      cookie,
+    );
+    expect(cleared.status).toBe(200);
+    expect(await getValidated(env.TOKENS, "edit-expiry-token")).toMatchObject({
+      status: "active",
+    });
+  });
+
+  it("400s an invalid expiry patch and a PUT with nothing to update", async () => {
+    const cookie = await login();
+    await call("/admin/api/tokens", {
+      ...form(
+        { label: "eb", providers: "openai", token: "bad-patch-token" },
+        cookie,
+      ),
+    });
+    const hash = await sha256hex("bad-patch-token");
+    // POST already pins both parseExpiry rejection branches; one case pins the PUT wiring.
+    const bad = await put(
+      `/admin/api/tokens/${hash}`,
+      { expiresAt: "2030-01-01T00:00" },
+      cookie,
+    );
+    expect(bad.status).toBe(400);
+    expect((await put(`/admin/api/tokens/${hash}`, {}, cookie)).status).toBe(
+      400,
+    );
+    expect(await getValidated(env.TOKENS, "bad-patch-token")).toMatchObject({
+      label: "eb",
+    });
+  });
+
   it("dashboard markup pins the browser-side UTC conversion and the visibility-gated poll", async () => {
     const cookie = await login();
     const page = await (await call("/admin", { headers: { cookie } })).text();
     expect(page).toContain("hx-on::config-request");
     expect(page).toContain("toISOString()");
-    expect(page).toContain("every 120s [document.visibilityState==='visible']");
+    expect(page).toContain(
+      "every 120s [document.visibilityState==='visible' && document.activeElement?.type !== 'datetime-local']",
+    );
     // Pin the hash so HTMX upgrades must update SRI deliberately.
     expect(page).toContain(
       'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"',

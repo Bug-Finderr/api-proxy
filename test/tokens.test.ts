@@ -4,7 +4,7 @@ import {
   createToken,
   generateToken,
   listTokens,
-  setTokenStatus,
+  patchToken,
   sha256hex,
   touchLastUsed,
 } from "../src/tokens";
@@ -46,7 +46,18 @@ describe("createToken + getValidated", () => {
   });
 });
 
-describe("listTokens / setTokenStatus / deleteToken", () => {
+describe("listTokens / patchToken / deleteToken", () => {
+  it("patches expiry and an explicit undefined clears it from the stored JSON", async () => {
+    const { hash } = await createToken(env.TOKENS, {
+      label: "patch",
+      providers: ["openai"],
+      token: "patch-exp-token",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    });
+    await patchToken(env.TOKENS, hash, { expiresAt: undefined });
+    expect(await env.TOKENS.get(hash)).not.toContain("expiresAt");
+  });
+
   it("lists created tokens by hash with metadata", async () => {
     await createToken(env.TOKENS, {
       label: "L1",
@@ -125,7 +136,7 @@ describe("touchLastUsed", () => {
       providers: ["openai"],
       token: "to-revoke",
     });
-    await setTokenStatus(env.TOKENS, hash, "disabled");
+    await patchToken(env.TOKENS, hash, { status: "disabled" });
     await touchLastUsed(env.TOKENS, hash);
     expect(await getValidated(env.TOKENS, token)).toBeNull();
   });

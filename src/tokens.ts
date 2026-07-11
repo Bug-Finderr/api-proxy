@@ -39,7 +39,7 @@ export async function createToken(
 }
 
 // Own key so stamping never rewrites (or resurrects) a record the admin is concurrently disabling.
-const luKey = (hash: string) => `${hash}:lu`;
+export const luKey = (hash: string) => `${hash}:lu`;
 
 export type TokenRow = TokenMetadata & { hash: string; lastUsed?: string };
 
@@ -79,14 +79,15 @@ export async function listTokens(kv: KVNamespace): Promise<TokenRow[]> {
   });
 }
 
-export async function setTokenStatus(
+export async function patchToken(
   kv: KVNamespace,
   hash: string,
-  status: TokenMetadata["status"],
+  patch: Partial<Pick<TokenMetadata, "status" | "expiresAt">>,
 ): Promise<TokenMetadata | null> {
   const meta = parseMeta(await kv.get(hash));
   if (!meta) return null;
-  const updated = { ...meta, status };
+  // An explicit `expiresAt: undefined` clears it: JSON.stringify drops the key.
+  const updated = { ...meta, ...patch };
   await kv.put(hash, JSON.stringify(updated));
   return updated;
 }
