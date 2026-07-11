@@ -226,11 +226,7 @@ export const dashboardPage = () => html`<!doctype html>
 							</div>
 							<div>
 								<label for="expiresAt">Expires (optional)</label>
-								<!-- Use input because change fires only when the picker closes. Chromium rereads a
-								     snapped "Today" value only after blur/showPicker. -->
-								<input type="datetime-local" id="expiresAt" name="expiresAt"
-									hx-on:input="if (this.value.slice(11) === new Date().toTimeString().slice(0, 5)) { this.value = this.value.slice(0, 11) + '23:59'; this.blur(); try { this.showPicker() } catch {} }"
-								/>
+								<input type="datetime-local" id="expiresAt" name="expiresAt" />
 							</div>
 						</div>
 						<div class="checks">

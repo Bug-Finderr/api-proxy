@@ -294,9 +294,8 @@ describe("admin token CRUD", () => {
     expect(page).toContain("code.copy");
     expect(page).toContain("navigator.clipboard.writeText");
     expect(page).toContain('name="label" placeholder="alice-laptop" required');
-    expect(page).toContain("hx-on:input=");
-    expect(page).toContain("this.value.slice(0, 11) + '23:59'");
-    expect(page).toContain("this.blur(); try { this.showPicker() } catch {}");
+    // One body-level converter serves every datetime-local: Today snaps to 23:59, then UTC ISO.
+    expect(page).toContain("p.expiresAt.slice(0, 11) + '23:59'");
     const table = await (
       await call("/admin/api/tokens", { headers: { cookie } })
     ).text();
