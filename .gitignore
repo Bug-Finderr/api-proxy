@@ -6,30 +6,14 @@ out
 dist
 *.tgz
 
-# code coverage
-coverage
-*.lcov
-
 # logs
 logs
 _.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+report.*.json
 
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
-
-# local experiments / scratch
-.tmp-*
-HANDOFF.md
+# secrets
+.env*
+!.env.example
 
 # wrangler local state / build cache
 .wrangler
@@ -43,11 +27,6 @@ HANDOFF.md
 
 # Finder (MacOS) folder config
 .DS_Store
-
-CLAUDE.md
-
-# claude local settings
-.claude/settings.local.json
 
 # python venv for the separate-runner compat tests + caches
 .venv/

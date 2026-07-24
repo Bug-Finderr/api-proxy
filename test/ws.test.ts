@@ -250,50 +250,53 @@ describe("handleWsProxy: close propagation", () => {
   it.each([
     ["upstream", 4101, "upstream finished"],
     ["client", 4102, "client finished"],
-  ] as const)("propagates a %s close code and reason", async (source, code, reason) => {
-    await seed(`tk-close-${source}`, ["openai"]);
-    let upstreamPeer: WebSocket | undefined;
-    upstreamReply = () => {
-      const [worker, peer] = Object.values(new WebSocketPair());
-      upstreamPeer = peer;
-      peer.accept({ allowHalfOpen: true });
-      return new Response(null, { status: 101, webSocket: worker });
-    };
+  ] as const)(
+    "propagates a %s close code and reason",
+    async (source, code, reason) => {
+      await seed(`tk-close-${source}`, ["openai"]);
+      let upstreamPeer: WebSocket | undefined;
+      upstreamReply = () => {
+        const [worker, peer] = Object.values(new WebSocketPair());
+        upstreamPeer = peer;
+        peer.accept({ allowHalfOpen: true });
+        return new Response(null, { status: 101, webSocket: worker });
+      };
 
-    const res = await callWs(
-      new Request("https://proxy.example/v1/responses", {
-        headers: { authorization: `Bearer tk-close-${source}` },
-      }),
-    );
-    expect(res.status).toBe(101);
-    const client = res.webSocket!;
-    const upstream = upstreamPeer!;
-    client.accept({ allowHalfOpen: true });
-    const order: string[] = [];
-    const clientClosed = closeEvent(client, "client").then((event) => {
-      order.push("client");
-      return event;
-    });
-    const upstreamClosed = closeEvent(upstream, "upstream").then((event) => {
-      order.push("upstream");
-      return event;
-    });
-
-    try {
-      (source === "client" ? client : upstream).close(code, reason);
-      for (const event of await Promise.all([clientClosed, upstreamClosed])) {
-        expect(event.code).toBe(code);
-        expect(event.reason).toBe(reason);
-      }
-      // The destination must reciprocate before the initiator's close completes.
-      expect(order).toEqual(
-        source === "client" ? ["upstream", "client"] : ["client", "upstream"],
+      const res = await callWs(
+        new Request("https://proxy.example/v1/responses", {
+          headers: { authorization: `Bearer tk-close-${source}` },
+        }),
       );
-    } finally {
-      if (client.readyState !== WebSocket.CLOSED) client.close();
-      if (upstream.readyState !== WebSocket.CLOSED) upstream.close();
-    }
-  });
+      expect(res.status).toBe(101);
+      const client = res.webSocket!;
+      const upstream = upstreamPeer!;
+      client.accept({ allowHalfOpen: true });
+      const order: string[] = [];
+      const clientClosed = closeEvent(client, "client").then((event) => {
+        order.push("client");
+        return event;
+      });
+      const upstreamClosed = closeEvent(upstream, "upstream").then((event) => {
+        order.push("upstream");
+        return event;
+      });
+
+      try {
+        (source === "client" ? client : upstream).close(code, reason);
+        for (const event of await Promise.all([clientClosed, upstreamClosed])) {
+          expect(event.code).toBe(code);
+          expect(event.reason).toBe(reason);
+        }
+        // The destination must reciprocate before the initiator's close completes.
+        expect(order).toEqual(
+          source === "client" ? ["upstream", "client"] : ["client", "upstream"],
+        );
+      } finally {
+        if (client.readyState !== WebSocket.CLOSED) client.close();
+        if (upstream.readyState !== WebSocket.CLOSED) upstream.close();
+      }
+    },
+  );
 });
 
 describe("forwardCloseCode (close-code sanitization)", () => {

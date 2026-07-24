@@ -1,17 +1,17 @@
-# Rate Limiting binding: free on Workers Free, but a loose per-location ceiling
+# Rate limiting is loose abuse control
 
 ## Problem
 
-A per-token request-rate cap with no new storage that never uses plaintext tokens as limiter keys.
+Per-token throttling should not require another storage system or use plaintext tokens as keys.
 
-## What we found
+## Evidence
 
-- **Free-plan eligibility is undocumented** (a research pass even fabricated a "no additional charge" quote). Verified empirically: `wrangler deploy` on the Free account accepts the binding (the summary lists `env.RATE_LIMITER (N requests/60s) - Rate Limit`) and `limit()` enforces - treat undocumented platform claims as "verify by deploying," not fact.
-- **It is per-location and eventually consistent.** With `limit = 2 / 60s`, ~13 rapid requests slipped through before denials began in the local test. Because Cloudflare documents independent counters by location, roughly 2x across two locations is an inference, not a measurement from that run.
-- The limit is **fixed per namespace at deploy time** - no per-token-variable limit without tiered namespaces or a Durable Object counter.
+Cloudflare does not document Free-plan eligibility for this binding, but deployment on this Free account succeeds and the binding enforces locally. Counters are per location and eventually consistent: with a configured 2 requests per 60 seconds, a local burst allowed roughly 13 requests before denials began. That measurement shows the threshold is not a strict quota.
 
-## The decision we keep
+## Decision
 
-Key on the hash, never the plaintext. Fail-open, because the real abuse defense is revoke + scope, not this loose ceiling. `Retry-After` is a static 60 because the binding returns no reset time. Config and semantics: architecture §7.
+Key the binding on the token hash and fail open if it errors. Revocation and provider scope remain the real access controls. `Retry-After` is a static 60 seconds because the binding supplies no reset time.
 
-Related: [proxy-token-security.md](proxy-token-security.md). Primary source: [Workers Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+The threshold is fixed per binding at deployment. Different per-token tiers would need separate bindings or a different counter design.
+
+Source: [Workers Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).

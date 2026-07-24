@@ -14,8 +14,8 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: nubjs/setup-nub@47e5e7393d50f4e9544ddaf756aa277972afba2d # v0
         with:
-          nub-version: 0.4.7
-          node-version: 24
+          nub-version: 0.5.0
+          node-version: 26
           cache-dependency-path: nub.lock
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
@@ -25,8 +25,8 @@ jobs:
       - run: |
           uv venv --python 3.14
           uv pip install -r test/requirements.txt
-      - run: nubx --no-install tsc --noEmit
-      - run: nubx --no-install biome check .
+      - run: nub exec tsc --noEmit
+      - run: nub exec biome check .
       - run: nub audit --prod
-      - run: nubx --no-install wrangler deploy --dry-run
+      - run: nub exec wrangler deploy --dry-run
       - run: nub run test

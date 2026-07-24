@@ -10,7 +10,7 @@ preview_urls = false
 enabled = true
 
 # Dedicated token store; do not share it with another worker.
-# Create with `nubx wrangler kv namespace create api-proxy-tokens`; tests use an in-memory namespace.
+# Create with `nub exec wrangler kv namespace create api-proxy-tokens`; tests use an in-memory namespace.
 [[kv_namespaces]]
 binding = "TOKENS"
 id = "1b212581e15144fb9f931b221a8cc5cd"
@@ -52,7 +52,7 @@ namespace_id = "1002"
   limit = 10
   period = 60
 
-# Secrets (set with `nubx wrangler secret put <NAME>`), never committed:
+# Secrets (set with `nub exec wrangler secret put <NAME>`), never committed:
 #   OPENAI_API_KEY  ANTHROPIC_API_KEY  GEMINI_API_KEY  ADMIN_SECRET
 # Optional upstream overrides (plain vars, NOT secrets) default to the real hosts:
 #   OPENAI_UPSTREAM  ANTHROPIC_UPSTREAM  GEMINI_UPSTREAM
