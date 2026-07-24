@@ -3,14 +3,13 @@
   "type": "module",
   "private": true,
   "license": "MIT",
-  "packageManager": "nub@0.4.7",
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "devEngines": {
     "packageManager": {
       "name": "nub",
-      "version": "^0.4.7",
+      "version": "^0.5.0",
       "onFail": "warn"
     }
   },
@@ -24,31 +23,32 @@
     "prepare": "lefthook install"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^4.0.9",
-    "@ai-sdk/google": "^4.0.9",
-    "@ai-sdk/openai": "^4.0.8",
-    "@anthropic-ai/sdk": "^0.110.0",
-    "@biomejs/biome": "^2.5.3",
-    "@cloudflare/vitest-pool-workers": "^0.18.2",
-    "@cloudflare/workers-types": "^5.20260708.1",
-    "@genkit-ai/google-genai": "^1.39.0",
-    "@google/genai": "^2.10.0",
-    "@langchain/anthropic": "^1.5.1",
-    "@langchain/core": "^1.2.1",
+    "@ai-sdk/anthropic": "^4.0.20",
+    "@ai-sdk/google": "^4.0.24",
+    "@ai-sdk/openai": "^4.0.20",
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@biomejs/biome": "^2.5.5",
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
+    "@cloudflare/workers-types": "^5.20260724.1",
+    "@genkit-ai/google-genai": "^1.40.1",
+    "@google/genai": "^2.13.0",
+    "@langchain/anthropic": "^1.5.2",
+    "@langchain/core": "^1.2.3",
     "@langchain/google-genai": "^2.2.0",
-    "@langchain/openai": "^1.5.3",
+    "@langchain/openai": "^1.5.5",
     "@types/ws": "^8.18.1",
-    "ai": "^7.0.17",
-    "genkit": "^1.39.0",
-    "lefthook": "^2.1.9",
-    "openai": "^6.45.0",
-    "typescript": "^6.0.3",
+    "ai": "^7.0.37",
+    "genkit": "^1.40.1",
+    "lefthook": "^2.1.10",
+    "openai": "^6.49.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10",
-    "wrangler": "^4.108.0",
-    "ws": "^8.21.0",
+    "wrangler": "^4.114.0",
+    "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "dependencies": {
-    "hono": "^4.12.28"
-  }
+    "hono": "^4.12.32"
+  },
+  "packageManager": "nub@0.5.0"
 }
