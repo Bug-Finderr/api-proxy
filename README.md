@@ -18,7 +18,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="https://<worker>/v1", api_key="<proxy-token>")
 client.chat.completions.create(
-    model="gpt-5.6", messages=[{"role": "user", "content": "Hello"}])
+    model="gpt-5.6-luna", messages=[{"role": "user", "content": "Hello"}])
 ```
 
 Browser requests are supported through CORS. Provider-specific browser opt-ins still apply, such as Anthropic's `dangerouslyAllowBrowser`.
